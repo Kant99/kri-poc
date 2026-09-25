@@ -69,7 +69,6 @@ lerna-debug.log*
 *.db
 *.sqlite
 *.sqlite3
-kri_audit.db
 
 # ==============================================================================
 # Logs & Runtime
@@ -124,3 +123,5 @@ dmypy.json
 ehthumbs.db
 Thumbs.db
 desktop.ini
+TRACKER.md
+prompt.md

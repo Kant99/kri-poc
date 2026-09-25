@@ -532,13 +532,14 @@ def get_run_trace_for_ui(run_reference: str, db: Session = Depends(get_db)):
                             cnt = outp.get("record_count", 0)
                             summary = f"Extracted {cnt} {entity.replace('_', ' ').title()} records from {src}."
                         elif tool_name == "compare_records":
-                            mp = len(outp.get("matched_pairs", []))
-                            mis = len(outp.get("missing_pos", []))
-                            amb = len(outp.get("ambiguous_matches", []))
+                            summary_dict = outp.get("summary", {}) if isinstance(outp.get("summary"), dict) else {}
+                            mp = outp.get("matched_count", summary_dict.get("matched_orders", len(outp.get("matched_pairs", []))))
+                            mis = outp.get("unmatched_orders_count", summary_dict.get("orders_without_po", len(outp.get("missing_pos", []))))
+                            amb = outp.get("ambiguous_count", summary_dict.get("ambiguous_matched_orders", len(outp.get("ambiguous_matches", []))))
                             summary = f"Reconciled records: {mp} matched, {mis} missing PO, {amb} ambiguous matches."
                         elif tool_name == "calculate_difference":
-                            diff = outp.get("difference", 0.0)
-                            pct = outp.get("difference_percentage", 0.0)
+                            diff = float(outp.get("difference") or 0.0)
+                            pct = float(outp.get("difference_percentage") or 0.0)
                             summary = f"Calculated absolute variance: EUR {diff:,.2f} ({pct:.1f}% deviation)."
                         elif tool_name == "apply_threshold":
                             is_exc = outp.get("is_exception", False)

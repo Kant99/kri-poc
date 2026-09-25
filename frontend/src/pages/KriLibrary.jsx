@@ -20,7 +20,7 @@ export function KriLibrary({ kris, saveKri, setKriStatus, setRunReq }) {
   return (
     <section>
       <header className="page-head row">
-        <div><h1>KRI library</h1><p className="lede">Nothing here is hard-coded. Each KRI is a configuration: what to pull, which steps to perform, what counts as an exception, and when to run.</p></div>
+        <div><h1>KRI library</h1><p className="lede">Each KRI is a configuration: what to pull, which steps to perform, what counts as an exception, and when to run.</p></div>
         <div className="actions"><Btn onClick={() => setShowJson(true)}>View config file</Btn><Btn kind="primary" onClick={() => setEdit(blank())}>Add a KRI</Btn></div>
       </header>
       <div className="filters">
@@ -31,22 +31,24 @@ export function KriLibrary({ kris, saveKri, setKriStatus, setRunReq }) {
       <table className="tbl">
         <thead><tr><th>KRI</th><th>Risk</th><th>Sources</th><th>Runs</th><th>Next run</th><th>Status</th><th /></tr></thead>
         <tbody>
-          {shown.map((k) => { const nr = nextRunFor(k); return (
-            <tr key={k.id}>
-              <td><strong>{k.id}</strong><div>{k.name}</div><div className="muted small">{k.area} · {k.kind} · reviewer {k.reviewer}{k.owner ? ` · ${k.owner}` : ''}</div></td>
-              <td className="wrap">{k.risk}{k.note && <div className="note">{k.note}</div>}</td>
-              <td><div className="srcs">{k.sources.map((s) => <SourceChip key={s} id={s} />)}</div></td>
-              <td>{FREQ[k.frequency]}<div className="muted small">{k.sampling}% of population{k.alignToClose ? ` · +${k.fetchOffsetDays}d after close` : ''}</div></td>
-              <td className="nowrap">{nr ? fmtDate(nr) : <span className="muted">—</span>}<div className="muted small">{k.lastRun ? `last ${fmtDate(k.lastRun)}` : 'never run'}</div></td>
-              <td><Tag tone={statusTone(k.status)}>{statusLabel(k.status)}</Tag></td>
-              <td className="row-actions">
-                <Btn kind="link" onClick={() => setEdit({ ...k, steps: [...k.steps], thresholds: k.thresholds.map((t) => ({ ...t })), sources: [...k.sources] })}>Configure</Btn>
-                {k.status === 'active' && <Btn kind="link" onClick={() => setRunReq({ kriId: k.id })}>Run now</Btn>}
-                {k.status === 'active' ? <Btn kind="link" onClick={() => setStatus(k.id, 'paused')}>Pause</Btn> : k.status === 'paused' ? <Btn kind="link" onClick={() => setStatus(k.id, 'active')}>Resume</Btn> : null}
-                {k.status === 'active' && <Btn kind="link" onClick={() => setStatus(k.id, 'handed')}>Hand to business</Btn>}
-              </td>
-            </tr>
-          ); })}
+          {shown.map((k) => {
+            const nr = nextRunFor(k); return (
+              <tr key={k.id}>
+                <td><strong>{k.id}</strong><div>{k.name}</div><div className="muted small">{k.area} · {k.kind} · reviewer {k.reviewer}{k.owner ? ` · ${k.owner}` : ''}</div></td>
+                <td className="wrap">{k.risk}{k.note && <div className="note">{k.note}</div>}</td>
+                <td><div className="srcs">{k.sources.map((s) => <SourceChip key={s} id={s} />)}</div></td>
+                <td>{FREQ[k.frequency]}<div className="muted small">{k.sampling}% of population{k.alignToClose ? ` · +${k.fetchOffsetDays}d after close` : ''}</div></td>
+                <td className="nowrap">{nr ? fmtDate(nr) : <span className="muted">—</span>}<div className="muted small">{k.lastRun ? `last ${fmtDate(k.lastRun)}` : 'never run'}</div></td>
+                <td><Tag tone={statusTone(k.status)}>{statusLabel(k.status)}</Tag></td>
+                <td className="row-actions">
+                  <Btn kind="link" onClick={() => setEdit({ ...k, steps: [...k.steps], thresholds: k.thresholds.map((t) => ({ ...t })), sources: [...k.sources] })}>Configure</Btn>
+                  {k.status === 'active' && <Btn kind="link" onClick={() => setRunReq({ kriId: k.id })}>Run now</Btn>}
+                  {k.status === 'active' ? <Btn kind="link" onClick={() => setStatus(k.id, 'paused')}>Pause</Btn> : k.status === 'paused' ? <Btn kind="link" onClick={() => setStatus(k.id, 'active')}>Resume</Btn> : null}
+                  {k.status === 'active' && <Btn kind="link" onClick={() => setStatus(k.id, 'handed')}>Hand to business</Btn>}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
       {edit && <KriEditor kri={edit} onCancel={() => setEdit(null)} onSave={upsert} />}

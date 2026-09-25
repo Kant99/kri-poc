@@ -60,22 +60,14 @@ export function RunModal({ kri, onClose, onDone }) {
   const running = stage >= 0;
   const timer = useRef(null);
 
-  // Construct dynamic stages directly incorporating the KRI's configured test steps
+  // Construct dynamic stages directly from the KRI's configured test steps
   const runStages = React.useMemo(() => {
     if (kri.steps && kri.steps.length > 0) {
       const srcList = kri.sources && kri.sources.length > 0 ? kri.sources : ['sap', 'red_box_po'];
-      const stages = [
-        ['Connecting with the agent service account', srcList[0]],
-        ['Extracting the full population for the period', srcList[0]],
-      ];
-      kri.steps.forEach((stepText, idx) => {
+      return kri.steps.map((stepText, idx) => {
         const src = srcList[Math.min(idx, srcList.length - 1)] || null;
-        stages.push([stepText, src]);
+        return [stepText, src];
       });
-      stages.push(['Cross-checking against sources and calculating variances', srcList[Math.min(1, srcList.length - 1)]]);
-      stages.push(['Writing explainability reasoning and compiling audit evidence', null]);
-      stages.push(['Populating testing report and audit workpapers', 'tickets']);
-      return stages;
     }
     return STAGES;
   }, [kri]);
@@ -126,7 +118,7 @@ export function RunModal({ kri, onClose, onDone }) {
         ) : (
           <div>
             <div className="muted small" style={{ marginBottom: '12px' }}>
-              Executing {runStages.length} automated test and audit stages...
+              Executing {runStages.length} automated test steps...
             </div>
             <ol className="progress" style={{ maxHeight: '360px', overflowY: 'auto' }}>
               {runStages.map(([label, src], i) => (
