@@ -63,7 +63,7 @@ export function RunModal({ kri, onClose, onDone }) {
   // Construct dynamic stages directly from the KRI's configured test steps
   const runStages = React.useMemo(() => {
     if (kri.steps && kri.steps.length > 0) {
-      const srcList = kri.sources && kri.sources.length > 0 ? kri.sources : ['sap', 'red_box_po'];
+      const srcList = kri.sources && kri.sources.length > 0 ? kri.sources : ['sap_ecc', 'red_box_po'];
       return kri.steps.map((stepText, idx) => {
         const src = srcList[Math.min(idx, srcList.length - 1)] || null;
         return [stepText, src];
@@ -71,6 +71,21 @@ export function RunModal({ kri, onClose, onDone }) {
     }
     return STAGES;
   }, [kri]);
+
+  const defaultPeriods = [
+    ...(kri.frequency === 'weekly' || opts.period === 'Week to date' ? ['Week to date'] : []),
+    'P9 · Sep 2026 (to date)',
+    'P8 · Aug 2026',
+    'P7 · Jul 2026',
+    'Q3 FY26 (to date)',
+    'Q2 FY26',
+    'Q1 FY26 (Jan - Mar 2026)',
+    'P3 · Mar 2026',
+    'P2 · Feb 2026',
+    'P1 · Jan 2026',
+    'H1 FY26 (Jan - Jun 2026)',
+  ];
+  const periodOptions = Array.from(new Set([opts.period, ...defaultPeriods].filter(Boolean)));
 
   const start = () => {
     setStage(0);
@@ -95,7 +110,7 @@ export function RunModal({ kri, onClose, onDone }) {
         {!running ? (
           <div>
             <div className="grid2">
-              <Field label="Period"><select value={opts.period} onChange={(e) => setOpts({ ...opts, period: e.target.value })}>{['P9 · Sep 2026 (to date)', 'P8 · Aug 2026', 'P7 · Jul 2026', 'Q3 FY26 (to date)', 'Q2 FY26'].map((p) => <option key={p}>{p}</option>)}</select></Field>
+              <Field label="Period"><select value={opts.period} onChange={(e) => setOpts({ ...opts, period: e.target.value })}>{periodOptions.map((p) => <option key={p} value={p}>{p}</option>)}</select></Field>
               <Field label="Region"><select value={opts.region} onChange={(e) => setOpts({ ...opts, region: e.target.value })}>{['All regions', 'MEA', 'Europe', 'APAC', 'Americas'].map((p) => <option key={p}>{p}</option>)}</select></Field>
               <Field label="Business group"><select value={opts.bg} onChange={(e) => setOpts({ ...opts, bg: e.target.value })}>{['BG-A + BG-B', 'BG-A', 'BG-B'].map((p) => <option key={p}>{p}</option>)}</select></Field>
               <Field label="Population"><div className="unit-in"><input type="number" min="1" max="100" value={opts.sampling} onChange={(e) => setOpts({ ...opts, sampling: Number(e.target.value) })} /><span>%</span></div></Field>

@@ -14,15 +14,24 @@ def calculate_kri_metrics_handler(
     input_data: CalculateKRIMetricsInput,
     context: AuditExecutionContext,
 ) -> CalculateKRIMetricsOutput:
-    """Compute aggregate KRI metrics from candidate exceptions and comparison records."""
-    # Retrieve comparisons from context
-    all_orders = []
-    for ds_key, records in context.datasets.items():
-        if "order" in ds_key.lower():
-            all_orders.extend(records)
+    """Compute aggregate KRI metrics from candidate exceptions and comparison records.
 
-    total_transactions = len(all_orders)
-    total_order_value = sum(float(o.get("order_amount", 0.0)) for o in all_orders)
+    The population is resolved from the plan-supplied dataset reference. The previous
+    ``"order" in dataset_key`` substring sniff is retained only as a fallback for direct
+    tool calls that carry no plan binding.
+    """
+    population_reference = input_data.population_dataset_reference
+    if population_reference and context.get_dataset(population_reference) is None:
+        raise ValueError(
+            f"Population dataset '{population_reference}' was not produced by any extraction step in this run."
+        )
+    all_population = context.get_population_records(population_reference)
+
+    total_transactions = len(all_population)
+    total_population_value = sum(
+        float(record.get("order_amount") or record.get("po_amount") or record.get("amount") or 0.0)
+        for record in all_population
+    )
 
     exceptions = context.candidate_exceptions
     counts_by_type = defaultdict(int)
@@ -51,12 +60,20 @@ def calculate_kri_metrics_handler(
             exception_order_ids.add(order_id)
             exception_order_value += order_amt
 
+    # Aggregate value reporting differs by test family: a debooking analysis reports the
+    # exception value as the debited amount, because that is the amount at risk.
+    debooking_codes = {"PREMATURE_RECOGNITION", "UNSUPPORTED_RECOGNITION", "BOOKING_QUALITY", "ORPHAN_DEBOOKING"}
+    debooked_value = 0.0
+    for exc in exceptions:
+        if exc.get("exception_type") in debooking_codes:
+            debooked_value += abs(float(exc.get("order_amount") or 0.0))
+
     total_exceptions = len(exceptions)
     matched_count = total_transactions - len(exception_order_ids)
 
     mismatch_val_pct = (
-        round((exception_order_value / total_order_value) * 100.0, 2)
-        if total_order_value > 0
+        round((exception_order_value / total_population_value) * 100.0, 2)
+        if total_population_value > 0
         else 0.0
     )
     exc_rate_count = (
@@ -68,7 +85,7 @@ def calculate_kri_metrics_handler(
 
     metrics_result = {
         "total_transactions": total_transactions,
-        "total_order_value": round(total_order_value, 2),
+        "total_order_value": round(total_population_value, 2),
         "matched_count": matched_count,
         "missing_po_count": missing_po_count,
         "amount_mismatch_count": amount_mismatch_count,
@@ -79,27 +96,28 @@ def calculate_kri_metrics_handler(
         "exception_rate_by_value": exc_rate_value,
         "counts_by_exception_type": dict(counts_by_type),
         "counts_by_severity": dict(counts_by_severity),
+        "total_debooked_value": round(debooked_value, 2),
     }
 
     context.calculated_metrics = metrics_result
 
     metric_defs = {
-        "total_transactions": "Total population of order intake records evaluated within audit period.",
-        "total_order_value": "Aggregate monetary sum of all evaluated order intake transactions.",
-        "matched_count": "Orders with corresponding purchase orders within acceptable variance tolerance.",
-        "missing_po_count": "Orders booked without any corresponding purchase order.",
-        "amount_mismatch_count": "Orders whose matched PO variance exceeds the configured threshold.",
+        "total_transactions": "Total population of records evaluated within the audit period.",
+        "total_order_value": "Aggregate monetary sum of the evaluated population.",
+        "matched_count": "Population records with a counterpart satisfying the configured tolerance.",
+        "missing_po_count": "Population records booked without any counterpart record.",
+        "amount_mismatch_count": "Matched records whose amount variance exceeds the configured threshold.",
         "total_exceptions": "Count of all identified audit exceptions.",
-        "exception_order_value": "Total monetary value of orders associated with flagged exceptions.",
-        "mismatch_value_percentage": "Ratio of exception order value to total order population value.",
-        "exception_rate_by_count": "Percentage of total transaction count flagged as exceptions.",
+        "exception_order_value": "Total monetary value of records associated with flagged exceptions.",
+        "mismatch_value_percentage": "Ratio of exception value to total population value.",
+        "exception_rate_by_count": "Percentage of total record count flagged as exceptions.",
         "exception_rate_by_value": "Percentage of total monetary value flagged as exceptions.",
     }
 
     return CalculateKRIMetricsOutput(
         status="SUCCESS",
         total_transactions=total_transactions,
-        total_order_value=round(total_order_value, 2),
+        total_order_value=round(total_population_value, 2),
         matched_count=matched_count,
         missing_po_count=missing_po_count,
         amount_mismatch_count=amount_mismatch_count,
@@ -112,3 +130,4 @@ def calculate_kri_metrics_handler(
         counts_by_severity=dict(counts_by_severity),
         metric_definitions=metric_defs,
     )
+

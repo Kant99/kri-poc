@@ -14,6 +14,8 @@ from app.schemas.tools import (
     CalculateKRIMetricsInput,
     BuildEvidenceInput,
     GenerateExplanationInput,
+    AnalyzeOIDebookingsInput,
+    DebookingRule,
 )
 from app.tools.fetch_financial_data import fetch_financial_data_handler
 from app.tools.compare_records import compare_records_handler
@@ -22,6 +24,7 @@ from app.tools.apply_threshold import apply_threshold_handler
 from app.tools.calculate_kri_metrics import calculate_kri_metrics_handler
 from app.tools.build_evidence import build_evidence_handler
 from app.tools.generate_explanation import generate_explanation_handler
+from app.tools.analyze_oi_debookings import analyze_oi_debookings_handler
 
 
 def test_fetch_financial_data_orders(db_session, sample_active_kri):
@@ -34,14 +37,16 @@ def test_fetch_financial_data_orders(db_session, sample_active_kri):
     )
 
     inp = FetchFinancialDataInput(
-        source_system="SAP_ECC",
-        entity="ORDER_INTAKE",
+        data_source_code="SAP_ECC",
+        entity_code="ORDER_INTAKE",
         start_date=date(2026, 1, 1),
         end_date=date(2026, 3, 31),
     )
     out = fetch_financial_data_handler(inp, context)
     assert out.status == "SUCCESS"
     assert out.record_count == 80
+    assert out.data_source_code == "SAP_ECC"
+    assert out.entity == "ORDER_INTAKE"
     assert out.dataset_reference in context.datasets
 
 
@@ -55,14 +60,15 @@ def test_fetch_financial_data_pos(db_session, sample_active_kri):
     )
 
     inp = FetchFinancialDataInput(
-        source_system="RED_BOX_PO",
-        entity="PURCHASE_ORDER",
+        data_source_code="RED_BOX_PO",
+        entity_code="PURCHASE_ORDER",
         start_date=date(2026, 1, 1),
         end_date=date(2026, 3, 31),
     )
     out = fetch_financial_data_handler(inp, context)
     assert out.status == "SUCCESS"
     assert out.record_count == 74
+    assert out.data_source_code == "RED_BOX_PO"
     assert out.dataset_reference in context.datasets
 
 
@@ -76,18 +82,25 @@ def test_compare_records_matching(db_session, sample_active_kri):
     )
 
     out_orders = fetch_financial_data_handler(
-        FetchFinancialDataInput(source_system="SAP_ECC", entity="ORDER_INTAKE", start_date=date(2026, 1, 1), end_date=date(2026, 3, 31)),
+        FetchFinancialDataInput(data_source_code="SAP_ECC", entity_code="ORDER_INTAKE", start_date=date(2026, 1, 1), end_date=date(2026, 3, 31)),
         context,
     )
     out_pos = fetch_financial_data_handler(
-        FetchFinancialDataInput(source_system="RED_BOX_PO", entity="PURCHASE_ORDER", start_date=date(2026, 1, 1), end_date=date(2026, 3, 31)),
+        FetchFinancialDataInput(data_source_code="RED_BOX_PO", entity_code="PURCHASE_ORDER", start_date=date(2026, 1, 1), end_date=date(2026, 3, 31)),
         context,
     )
 
     comp_inp = CompareRecordsInput(
         left_dataset_reference=out_orders.dataset_reference,
         right_dataset_reference=out_pos.dataset_reference,
-        match_configuration=MatchConfiguration(left_field="order_id", right_field="order_id", fallback_field="po_reference"),
+        match_configuration=MatchConfiguration(
+            left_field="order_id",
+            right_field="order_id",
+            left_id_field="order_id",
+            right_id_field="po_id",
+            fallback_field="po_reference",
+            fallback_right_field="po_id",
+        ),
     )
     comp_out = compare_records_handler(comp_inp, context)
 
@@ -223,3 +236,96 @@ def test_generate_explanation():
     )
     assert "has no corresponding purchase order" in out_missing.explanation
     assert out_missing.reason_code == "MISSING_PO"
+
+
+def test_analyze_oi_debookings_all_four_rules(db_session, sample_active_kri):
+    """Test Tool: analyze_oi_debookings identifies all 4 rule categories with ISO string dates."""
+    fin_repo = FinancialRepository(db_session)
+    audit_repo = AuditRepository(db_session)
+    run = audit_repo.create_audit_run(sample_active_kri.id, date(2026, 1, 1), date(2026, 6, 30))
+    context = AuditExecutionContext(
+        run.id, run.run_reference, sample_active_kri, db_session, fin_repo, audit_repo, date(2026, 1, 1), date(2026, 6, 30)
+    )
+
+    # Populate dataset 1: Order Intake Bookings (using ISO string dates as projected from entity)
+    orders = [
+        {"order_id": "ORD-001", "customer_name": "Acme Corp", "order_date": "2026-01-15", "order_amount": 100000.0, "currency": "EUR"},
+        {"order_id": "ORD-002", "customer_name": "Beta Ltd", "order_date": "2026-02-10", "order_amount": 200000.0, "currency": "EUR"},
+        {"order_id": "ORD-003", "customer_name": "Gamma Inc", "order_date": "2026-01-20", "order_amount": 50000.0, "currency": "EUR"},
+    ]
+    context.store_dataset("ds_bookings", "ORDER_INTAKE", "SAP_ECC", orders)
+
+    # Populate dataset 2: Order Intake Debookings (using ISO string dates)
+    debookings = [
+        # Cross-quarter reversal: Booked in 2026-Q1, debooked in 2026-Q2 -> PREMATURE_RECOGNITION
+        {"debooking_id": "DEB-001", "order_id": "ORD-001", "customer_name": "Acme Corp", "booking_date": "2026-01-15", "debooking_date": "2026-04-10", "debooking_amount": 30000.0, "amount": 30000.0, "reason_code": "CUSTOMER_REQUEST", "currency": "EUR"},
+        # Unsupported reason code -> UNSUPPORTED_RECOGNITION
+        {"debooking_id": "DEB-002", "order_id": "ORD-002", "customer_name": "Beta Ltd", "booking_date": "2026-02-10", "debooking_date": "2026-02-25", "debooking_amount": 50000.0, "amount": 50000.0, "reason_code": "NO_CONTRACT", "currency": "EUR"},
+        # Orphan debooking: references non-existent order ORD-999 -> ORPHAN_DEBOOKING
+        {"debooking_id": "DEB-003", "order_id": "ORD-999", "customer_name": "Delta LLC", "booking_date": "2026-01-10", "debooking_date": "2026-03-01", "debooking_amount": 40000.0, "amount": 40000.0, "reason_code": "CUSTOMER_CANCELLED", "currency": "EUR"},
+        # Same-quarter concentration: 25k reversal on 50k booking = 50% ratio > 15% limit -> BOOKING_QUALITY
+        {"debooking_id": "DEB-004", "order_id": "ORD-003", "customer_name": "Gamma Inc", "booking_date": "2026-01-20", "debooking_date": "2026-03-15", "debooking_amount": 25000.0, "amount": 25000.0, "reason_code": "COMMERCIAL_SETTLEMENT", "currency": "EUR"},
+    ]
+    context.store_dataset("ds_debookings", "ORDER_INTAKE_DEBOOKING", "SAP_ECC", debookings)
+
+    rules = [
+        DebookingRule(code="PREMATURE_RECOGNITION", condition="CROSS_QUARTER", severity="HIGH"),
+        DebookingRule(code="UNSUPPORTED_RECOGNITION", condition="REASON_CODE_IN", reason_codes=["NO_CONTRACT", "CUSTOMER_CANCELLED"], severity="CRITICAL"),
+        DebookingRule(code="ORPHAN_DEBOOKING", condition="NO_MATCHING_BOOKING", severity="HIGH"),
+        DebookingRule(code="BOOKING_QUALITY", condition="CUSTOMER_QUARTER_RATIO_ABOVE", threshold=0.15, severity="MEDIUM"),
+    ]
+
+    inp = AnalyzeOIDebookingsInput(
+        audit_run_reference=run.run_reference,
+        bookings_dataset_reference="ds_bookings",
+        debookings_dataset_reference="ds_debookings",
+        customer_quarter_ratio_threshold=0.15,
+        rules=rules,
+    )
+    out = analyze_oi_debookings_handler(inp, context)
+
+    assert out.status == "SUCCESS"
+    codes = {f["code"] for f in out.findings}
+    assert "PREMATURE_RECOGNITION" in codes
+    assert "UNSUPPORTED_RECOGNITION" in codes
+    assert "ORPHAN_DEBOOKING" in codes
+    assert "BOOKING_QUALITY" in codes
+    assert out.total_booked_value == 350000.0
+    assert out.total_debooked_value == 145000.0
+
+
+def test_build_evidence_debookings(db_session, sample_active_kri):
+    """Test Tool 6: build_evidence creates cryptographic hashes for debooking exceptions."""
+    fin_repo = FinancialRepository(db_session)
+    audit_repo = AuditRepository(db_session)
+    run = audit_repo.create_audit_run(sample_active_kri.id, date(2026, 1, 1), date(2026, 6, 30))
+    context = AuditExecutionContext(
+        run.id, run.run_reference, sample_active_kri, db_session, fin_repo, audit_repo, date(2026, 1, 1), date(2026, 6, 30)
+    )
+
+    context.add_candidate_exception({
+        "exception_reference": "exc_deb_001",
+        "exception_type": "PREMATURE_RECOGNITION",
+        "reason_code": "PREMATURE_RECOGNITION",
+        "order_id": "ORD-001",
+        "order_amount": 30000.0,
+        "severity": "HIGH",
+        "explanation": "Premature revenue recognition detected for Acme Corp.",
+        "calculation_details": {
+            "order_id": "ORD-001",
+            "customer_name": "Acme Corp",
+            "booking_quarter": "2026-Q1",
+            "debooking_quarter": "2026-Q2",
+            "debooking_amount": 30000.0,
+        },
+        "order_record": {"order_id": "ORD-001", "customer_name": "Acme Corp", "source_system": "SAP_ECC"},
+    })
+
+    out = build_evidence_handler(BuildEvidenceInput(audit_run_reference=run.run_reference), context)
+    assert out.status == "SUCCESS"
+    assert out.evidence_count == 1
+    ev = out.evidence_records[0]
+    assert ev.order_id == "ORD-001"
+    assert ev.reproducibility_hash is not None
+    assert len(ev.reproducibility_hash) == 64
+

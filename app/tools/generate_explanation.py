@@ -48,6 +48,49 @@ def generate_explanation_handler(
         )
         reason_code = "AMBIGUOUS_MATCH"
 
+    elif exc_type == "PREMATURE_RECOGNITION":
+        customer = calc.get("customer_name", "the customer")
+        booking_q = calc.get("booking_quarter", "an earlier quarter")
+        debit_q = calc.get("debooking_quarter", "a later quarter")
+        amount = calc.get("debooking_amount", 0.0)
+        currency = calc.get("currency", "USD")
+        reason = calc.get("reason_code", "TIMING_SHIFT")
+        explanation = (
+            f"Order intake for {customer} was booked in {booking_q} but reversed in {debit_q} "
+            f"for {amount:,.2f} {currency} (reason {reason}). Revenue was therefore recognised in "
+            f"{booking_q}, before the event that invalidated it, which is premature recognition."
+        )
+        reason_code = "PREMATURE_RECOGNITION"
+
+    elif exc_type == "UNSUPPORTED_RECOGNITION":
+        customer = calc.get("customer_name", "the customer")
+        reason = calc.get("reason_code", "UNSUPPORTED")
+        amount = calc.get("debooking_amount", 0.0)
+        currency = calc.get("currency", "USD")
+        explanation = (
+            f"Order intake for {customer} was reversed for {amount:,.2f} {currency} with reason "
+            f"{reason}, which indicates the original recognition was never supported rather than "
+            f"reclassified. The revenue was recognised without an enforceable basis."
+        )
+        reason_code = "UNSUPPORTED_RECOGNITION"
+
+    elif exc_type == "BOOKING_QUALITY":
+        # The tool already composes a precise, value-bearing sentence for this finding.
+        explanation = calc.get("detail") or (
+            f"Same-quarter debookings for {calc.get('customer_name', 'the customer')} in "
+            f"{calc.get('booking_quarter')} exceed the configured booking-quality limit."
+        )
+        reason_code = "BOOKING_QUALITY"
+
+    elif exc_type == "ORPHAN_DEBOOKING":
+        reference = calc.get("debooking_reference", "the debooking")
+        order_id = calc.get("order_id", "the referenced order")
+        explanation = (
+            f"Debooking {reference} references order {order_id}, which has no order intake record "
+            f"in the tested population, so the reversal cannot be tied to recognised revenue."
+        )
+        reason_code = "ORPHAN_DEBOOKING"
+
     else:
         explanation = f"Audit validation exception flagged for type {exc_type} based on deterministic evaluation."
         reason_code = exc_type

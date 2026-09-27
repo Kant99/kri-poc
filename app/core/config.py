@@ -42,6 +42,37 @@ class Settings(BaseSettings):
     ssl_verify: bool = Field(default=False, alias="SSL_VERIFY")
     logs_dir: str = Field(default="logs/runs", alias="LOGS_DIR")
 
+    # Plan Interpretation Settings
+    # rules  : deterministic keyword interpreter only (no LLM)
+    # llm    : LLM classifies operations, deterministic resolvers own all parameters
+    # hybrid : LLM first, keyword rules as fallback when Azure is unavailable
+    plan_interpreter: str = Field(default="hybrid", alias="PLAN_INTERPRETER")
+    # When true an unresolvable step is a hard error (R4) rather than a silent default.
+    strict_interpretation: bool = Field(default=True, alias="STRICT_INTERPRETATION")
+    # Run the deterministic plan executor (R1). When false the legacy LLM loop is used.
+    execution_mode: str = Field(default="plan", alias="EXECUTION_MODE")
+    plan_prompt_version: str = Field(default="planner-v2", alias="PLAN_PROMPT_VERSION")
+    auto_regenerate_plans: bool = Field(default=True, alias="AUTO_REGENERATE_PLANS")
+
+    def is_plan_executor_enabled(self) -> bool:
+        """Return True when the deterministic plan executor should drive audit runs."""
+        return self.execution_mode.strip().lower() == "plan"
+
+    def is_strict_interpretation(self) -> bool:
+        """Return True when ambiguous steps must fail instead of falling back to a default."""
+        return bool(self.strict_interpretation)
+
+    def get_interpreter_mode(self) -> str:
+        """Resolve the effective interpreter mode given current Azure configuration."""
+        mode = (self.plan_interpreter or "hybrid").strip().lower()
+        if mode not in ("rules", "llm", "hybrid"):
+            mode = "hybrid"
+        if mode in ("llm", "hybrid") and not self.is_azure_configured():
+            return "rules"
+        if self.use_mock_llm:
+            return "rules"
+        return mode
+
     def get_normalized_azure_endpoint(self) -> Optional[str]:
         """Extract the root https://<resource>.openai.azure.com from any endpoint string."""
         if not self.azure_openai_endpoint:

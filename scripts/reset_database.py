@@ -1,6 +1,7 @@
 """Database Reset and Seeding Utility Script.
 
-Drops all tables, recreates the schema, and seeds both KRI configuration and 80 mock records.
+Drops all tables, recreates the schema, seeds the KRI configuration (including data source
+entity bindings) and the mock Order Intake / Purchase Order records, then verifies the result.
 """
 
 import sys
@@ -11,14 +12,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy.orm import Session
 from app.core.database import Base, engine, SessionLocal
+from app.services.data_source_bootstrap import register_all_entities
 from scripts.seed_kri import seed_kri_configuration
-from scripts.seed_data import seed_financial_data
-from app.models.kri import KRI, ProcessArea, DataSource
+from scripts.seed_data import seed_financial_data, verify_seeded_data
+from app.models.kri import KRI, ProcessArea, DataSource, DataSourceEntity
+from app.models.audit import ExecutionPlan
 from app.models.financial import OrderIntake, PurchaseOrder
 
 
 def reset_and_seed_database() -> None:
     """Drop, recreate, and seed the entire database."""
+    register_all_entities()
     print("Resetting database tables...")
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
@@ -29,24 +33,30 @@ def reset_and_seed_database() -> None:
         print("\n--- 1. Seeding KRI Master Configuration ---")
         kri_id = seed_kri_configuration(db)
 
-        print("\n--- 2. Seeding 80 Mock Financial Transactions ---")
+        print("\n--- 2. Seeding Mock Financial Transactions ---")
         seed_financial_data(db, record_count=80)
 
-        # Summary Verification
+        print("\n--- 3. Verifying ---")
+        verify_seeded_data(db)
+
         pa_count = db.query(ProcessArea).count()
         ds_count = db.query(DataSource).count()
+        binding_count = db.query(DataSourceEntity).count()
+        plan_count = db.query(ExecutionPlan).count()
         kri_count = db.query(KRI).count()
         orders_count = db.query(OrderIntake).count()
         pos_count = db.query(PurchaseOrder).count()
+        queryable = db.query(DataSource).filter(DataSource.is_queryable == True).count()
 
         print("\n==================================================")
         print("DATABASE INITIALIZATION & SEED SUMMARY")
         print("==================================================")
-        print(f"Process Areas Seeded : {pa_count}")
-        print(f"Data Sources Seeded  : {ds_count}")
-        print(f"KRIs Configured      : {kri_count} (Primary Active KRI ID: {kri_id})")
-        print(f"Order Intake Records : {orders_count} (SAP ECC)")
-        print(f"Purchase Orders      : {pos_count} (Red Box PO)")
+        print(f"Process Areas Seeded   : {pa_count}")
+        print(f"Data Sources Seeded    : {ds_count} ({queryable} queryable, {binding_count} entity bindings)")
+        print(f"KRIs Configured        : {kri_count} (Primary Active KRI ID: {kri_id})")
+        print(f"Execution Plans Stored : {plan_count}")
+        print(f"Order Intake Records   : {orders_count} (SAP ECC)")
+        print(f"Purchase Orders        : {pos_count} (Red Box PO)")
         print("==================================================")
         print("Database is ready for audit execution!")
 

@@ -29,8 +29,23 @@ class AuditRepository:
         is_valid: bool = True,
         validation_errors: Optional[List[str]] = None,
         audit_run_id: Optional[int] = None,
+        source: str = "RULES",
+        steps_hash: Optional[str] = None,
+        plan_hash: Optional[str] = None,
+        interpreter_meta: Optional[Dict[str, Any]] = None,
+        created_by: Optional[str] = None,
+        force_new_version: bool = True,
     ) -> ExecutionPlan:
-        # Determine next version
+        """Persist a new plan version.
+
+        With ``force_new_version=False`` an identical plan for the same ``steps_hash`` is
+        reused rather than creating version churn.
+        """
+        if not force_new_version and steps_hash:
+            existing = self.get_plan_for_steps_hash(kri_id, steps_hash)
+            if existing is not None:
+                return existing
+
         latest = (
             self.db.query(ExecutionPlan)
             .filter(ExecutionPlan.kri_id == kri_id)
@@ -46,6 +61,11 @@ class AuditRepository:
             plan_payload=plan_payload,
             is_valid=is_valid,
             validation_errors=validation_errors or [],
+            source=source,
+            steps_hash=steps_hash,
+            plan_hash=plan_hash,
+            interpreter_meta=interpreter_meta,
+            created_by=created_by,
         )
         self.db.add(plan)
         self.db.commit()
@@ -58,6 +78,30 @@ class AuditRepository:
             .filter(ExecutionPlan.kri_id == kri_id, ExecutionPlan.is_valid == True)
             .order_by(desc(ExecutionPlan.version))
             .first()
+        )
+
+    def get_plan_by_id(self, plan_id: int) -> Optional[ExecutionPlan]:
+        return self.db.query(ExecutionPlan).filter(ExecutionPlan.id == plan_id).first()
+
+    def get_plan_for_steps_hash(self, kri_id: int, steps_hash: str) -> Optional[ExecutionPlan]:
+        """Return the valid plan bound to this exact configuration state, if any (R3)."""
+        return (
+            self.db.query(ExecutionPlan)
+            .filter(
+                ExecutionPlan.kri_id == kri_id,
+                ExecutionPlan.steps_hash == steps_hash,
+                ExecutionPlan.is_valid == True,
+            )
+            .order_by(desc(ExecutionPlan.version))
+            .first()
+        )
+
+    def list_plans_for_kri(self, kri_id: int) -> List[ExecutionPlan]:
+        return (
+            self.db.query(ExecutionPlan)
+            .filter(ExecutionPlan.kri_id == kri_id)
+            .order_by(desc(ExecutionPlan.version))
+            .all()
         )
 
     # Audit Run Operations

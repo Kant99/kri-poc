@@ -29,7 +29,11 @@ router = APIRouter(prefix="/audits", tags=["Audit Execution & Results"])
 
 @router.post("/run", response_model=AuditRunDetailResponse, status_code=status.HTTP_200_OK)
 def run_audit(req: AuditRunRequest, db: Session = Depends(get_db)):
-    """Trigger an autonomous agentic audit run for a target KRI and date window."""
+    """Execute a KRI audit from its interpreted execution plan.
+
+    The plan matching the KRI's current configuration is used unless ``execution_plan_id``
+    pins an exact version.
+    """
     try:
         service = AuditService(db)
         return service.execute_audit_run(req)
@@ -37,6 +41,17 @@ def run_audit(req: AuditRunRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(val_err))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Audit execution failed: {e}")
+
+
+@router.post("/{run_id}/replay", response_model=AuditRunDetailResponse, status_code=status.HTTP_200_OK)
+def replay_audit_run(run_id: int, db: Session = Depends(get_db)):
+    """Re-execute a past run's pinned plan version against the same audit window."""
+    try:
+        return AuditService(db).replay_audit_run(run_id)
+    except ValueError as val_err:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(val_err))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Replay failed: {e}")
 
 
 @router.get("", response_model=List[AuditRunSummary])
@@ -85,15 +100,14 @@ def list_audit_exceptions(
 @router.get("/{run_id}/exceptions/{exception_id}", response_model=AuditExceptionDetailResponse)
 def get_audit_exception_detail(run_id: int, exception_id: int, db: Session = Depends(get_db)):
     """Retrieve detailed exception report with explanation and evidence link."""
+    from app.models.audit import AuditException
+
     repo = AuditRepository(db)
     exc = (
-        db.query(repo.db.query(AuditRepository).model if hasattr(repo.db, 'model') else None)
-        if False
-        else None
+        db.query(AuditException)
+        .filter(AuditException.id == exception_id, AuditException.audit_run_id == run_id)
+        .first()
     )
-    # Direct query
-    from app.models.audit import AuditException
-    exc = db.query(AuditException).filter(AuditException.id == exception_id, AuditException.audit_run_id == run_id).first()
     if not exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Exception {exception_id} not found in run {run_id}.")
 

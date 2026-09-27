@@ -36,11 +36,16 @@ def build_evidence_handler(
             "difference_percentage": exc.get("difference_percentage"),
         })
 
-        th_details = exc.get("threshold_details", {
-            "threshold_type": "PERCENTAGE_DIFFERENCE",
-            "operator": ">",
-            "threshold_value": exc.get("threshold_value", context.get_active_threshold_value()),
-        })
+        # Built lazily: a plain dict.get(key, context.get_active_threshold_value()) would
+        # evaluate the fallback even when threshold_details is present, and the KRI may
+        # legitimately have no threshold row when the limit came from the step text.
+        th_details = exc.get("threshold_details")
+        if not th_details:
+            th_details = {
+                "threshold_type": "PERCENTAGE_DIFFERENCE",
+                "operator": ">",
+                "threshold_value": exc.get("threshold_value", context.get_active_threshold_value(default=None)),
+            }
 
         explanation = exc.get("explanation", "Audit exception identified during KRI evaluation.")
         source_system = order_record.get("source_system", "SAP_ECC")
@@ -48,11 +53,15 @@ def build_evidence_handler(
         # Generate cryptographic hash for evidence reproducibility proof
         hash_payload = json.dumps({
             "order_id": order_id,
+            "exception_reference": exc_ref,
+            "exception_type": exc.get("exception_type"),
+            "reason_code": exc.get("reason_code"),
             "order_amount": exc.get("order_amount"),
             "po_amount": exc.get("po_amount"),
             "difference_percentage": exc.get("difference_percentage"),
             "threshold_value": th_details.get("threshold_value"),
-        }, sort_keys=True)
+            "calculation_details": calc_details,
+        }, sort_keys=True, default=str)
         reproducibility_hash = hashlib.sha256(hash_payload.encode("utf-8")).hexdigest()
 
         # Persist in DB

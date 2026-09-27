@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     Table,
     Text,
+    JSON,
 )
 from sqlalchemy.orm import relationship
 from app.core.database import Base
@@ -46,9 +47,35 @@ class DataSource(Base):
     code = Column(String(50), unique=True, nullable=False, index=True)
     system_type = Column(String(50), nullable=False)  # ERP, CRM, STORAGE, PO_ENGINE
     description = Column(Text, nullable=True)
+    is_queryable = Column(Boolean, default=False, nullable=False)
+    availability_note = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
 
     kris = relationship("KRI", secondary=kri_data_sources, back_populates="data_sources")
+    entity_bindings = relationship(
+        "DataSourceEntity",
+        back_populates="data_source",
+        cascade="all, delete-orphan",
+    )
+
+
+class DataSourceEntity(Base):
+    """Binding between a catalog data source and a queryable business entity."""
+    __tablename__ = "data_source_entities"
+
+    id = Column(Integer, primary_key=True, index=True)
+    data_source_id = Column(
+        Integer,
+        ForeignKey("data_sources.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    entity_code = Column(String(64), nullable=False, index=True)
+    is_primary = Column(Boolean, default=True, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+    data_source = relationship("DataSource", back_populates="entity_bindings")
 
 
 class KRI(Base):
@@ -79,7 +106,13 @@ class KRI(Base):
 
 
 class KRITestStep(Base):
-    """Administrator-defined natural language test step for a KRI."""
+    """Administrator-defined test step for a KRI.
+
+    ``title``/``instruction`` hold the natural language the user writes. The optional
+    structured columns let a user pin the interpretation (``operation``/``parameters``) or
+    the read target (``data_source_id``/``entity_code``) when they want full determinism
+    instead of relying on the agent.
+    """
     __tablename__ = "kri_test_steps"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -88,10 +121,45 @@ class KRITestStep(Base):
     title = Column(String(255), nullable=False)
     instruction = Column(Text, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
+    operation = Column(String(64), nullable=True)
+    parameters = Column(JSON, nullable=True)
+    data_source_id = Column(
+        Integer,
+        ForeignKey("data_sources.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    entity_code = Column(String(64), nullable=True)
+    expected_output = Column(Text, nullable=True)
+    content_hash = Column(String(64), nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
 
     kri = relationship("KRI", back_populates="test_steps")
+    data_source = relationship("DataSource", foreign_keys=[data_source_id])
+
+    def compute_content_hash(self) -> str:
+        """sha256 over every field that affects the resulting execution plan."""
+        import hashlib
+        import json
+
+        payload = json.dumps(
+            {
+                "step_number": self.step_number,
+                "title": self.title,
+                "instruction": self.instruction,
+                "is_active": bool(self.is_active),
+                "operation": self.operation,
+                "parameters": self.parameters,
+                "data_source_id": self.data_source_id,
+                "entity_code": self.entity_code,
+                "expected_output": self.expected_output,
+            },
+            sort_keys=True,
+            default=str,
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 class KRIThreshold(Base):

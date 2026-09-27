@@ -9,7 +9,7 @@ export function KriLibrary({ kris, saveKri, setKriStatus, setRunReq }) {
 
   const blank = () => ({
     id: `KRI-${String(kris.length + 1).padStart(2, '0')}`, name: '', area: 'O2C', kind: 'Lagging', status: 'draft', risk: '', objective: '',
-    sources: ['sap'], steps: ['Extract the population for the period.', 'Apply the test and classify each item.'],
+    sources: ['sap_ecc'], steps: ['Extract the population for the period.', 'Apply the test and classify each item.'],
     thresholds: [{ key: 'minAmount', label: 'Minimum amount', value: 10000, unit: 'EUR' }, { key: 'residual', label: 'Planner trigger: unexplained items per region', value: 5, unit: 'items' }],
     frequency: 'monthly', alignToClose: true, fetchOffsetDays: 3, sampling: 100, reviewer: 'Audit Manager', hitl: 'exceptions', owner: 'Internal Audit', lastRun: null,
   });

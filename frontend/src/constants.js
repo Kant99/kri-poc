@@ -5,7 +5,6 @@ export const fmtMoney = (n, c = 'EUR') => `${c} ${Number(n).toLocaleString('en-G
 export const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
 
 export const SOURCES = [
-  { id: 'sap', name: 'SAP ECC', kind: 'ERP (OI / YCA report, WBS, revenue)' },
   { id: 'sap_ecc', name: 'SAP ECC', kind: 'ERP (OI / YCA report, WBS, revenue)' },
   { id: 'obs', name: 'Order Booking System', kind: 'Order booking & CPO capture' },
   { id: 'red_box_po', name: 'Red Box / PO', kind: 'Centralized PO Engine' },
@@ -16,7 +15,7 @@ export const SOURCES = [
   { id: 'pmaster', name: 'Project Master', kind: 'Project & WBS master' },
   { id: 'tickets', name: 'Audit Ticketing / SharePoint', kind: 'Audit tickets, policies, work papers' },
 ];
-export const srcName = (id) => (SOURCES.find((s) => s.id === id) || {}).name || id;
+export const srcName = (id) => (id === 'sap' ? 'SAP ECC' : (SOURCES.find((s) => s.id === id) || {}).name || id);
 
 export const FREQ = { monthly: 'Every monthly close', quarterly: 'Every quarterly close', weekly: 'Every Monday', custom: 'On a chosen date' };
 
@@ -48,7 +47,7 @@ export const periodLabelFor = (k) => {
 
 
 export const STAGES = [
-  ['Connecting with the agent service account', 'sap'],
+  ['Connecting with the agent service account', 'sap_ecc'],
   ['Extracting the full population for the period', 'obs'],
   ['Running the configured test steps', null],
   ['Cross-checking against the other sources', 'mrep'],

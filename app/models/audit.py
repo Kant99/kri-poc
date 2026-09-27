@@ -19,7 +19,14 @@ from app.core.database import Base
 
 
 class ExecutionPlan(Base):
-    """Structured execution plan translated from administrator test steps."""
+    """Structured execution plan interpreted from administrator test steps.
+
+    The plan is the execution contract (R1): the run dispatches tools from ``plan_payload``
+    and never re-reads the raw step text. ``steps_hash`` binds the plan to the exact step
+    content and KRI data source assignment it was derived from, so a plan is either current
+    or provably superseded (R3). There is deliberately no status column: superseded-ness is
+    derived by comparing ``steps_hash`` against the KRI's current hash.
+    """
     __tablename__ = "execution_plans"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -29,6 +36,11 @@ class ExecutionPlan(Base):
     plan_payload = Column(JSON, nullable=False)  # Structured steps and operations
     is_valid = Column(Boolean, default=True, nullable=False)
     validation_errors = Column(JSON, nullable=True)
+    source = Column(String(16), default="RULES", nullable=False)  # RULES | LLM | MIXED
+    plan_hash = Column(String(64), nullable=True, index=True)
+    steps_hash = Column(String(64), nullable=True, index=True)
+    interpreter_meta = Column(JSON, nullable=True)
+    created_by = Column(String(100), nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
 
 
