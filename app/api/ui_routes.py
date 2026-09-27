@@ -1156,11 +1156,6 @@ def _resolve_ui_window(payload: Dict[str, Any]) -> tuple:
             year, last_month, calendar.monthrange(year, last_month)[1]
         )
 
-    match = re.search(r"([A-Za-z]{3,9})\s+(\d{4})", period)
-    if match:
-        for month in range(1, 13):
-            if calendar.month_name[month][:3].lower() == match.group(1)[:3].lower():
-                return _month_range(int(match.group(2)), month)
     match = re.search(r"Q([1-4])\s*FY\s*(\d{2,4})", period, re.IGNORECASE)
     if match:
         quarter = int(match.group(1))
@@ -1171,6 +1166,12 @@ def _resolve_ui_window(payload: Dict[str, Any]) -> tuple:
         return date(year, first_month, 1), date(
             year, last_month, calendar.monthrange(year, last_month)[1]
         )
+
+    match = re.search(r"([A-Za-z]{3,9})\s+(\d{4})", period)
+    if match:
+        for month in range(1, 13):
+            if calendar.month_name[month][:3].lower() == match.group(1)[:3].lower():
+                return _month_range(int(match.group(2)), month)
 
     raise HTTPException(
         status_code=400,
