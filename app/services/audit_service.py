@@ -11,7 +11,7 @@ from app.repositories.kri_repository import KRIRepository
 from app.repositories.financial_repository import FinancialRepository
 from app.repositories.audit_repository import AuditRepository
 from app.services.execution_context import AuditExecutionContext
-from app.services.plan_service import PlanService
+from app.services.plan_coordinator import PlanCoordinator, PlanStaleError
 from app.services.agent_orchestrator import AgentOrchestrator
 from app.schemas.audit import AuditRunRequest, AuditRunDetailResponse
 from app.services.llm_provider import LLMProvider
@@ -31,10 +31,37 @@ class AuditService:
         self.kri_repo = KRIRepository(db)
         self.financial_repo = FinancialRepository(db)
         self.audit_repo = AuditRepository(db)
+        self.plan_coordinator = PlanCoordinator(db, llm_provider=llm_provider)
         self.orchestrator = AgentOrchestrator(llm_provider=llm_provider)
 
+    def _resolve_plan(self, kri_id: int, execution_plan_id: Optional[int] = None):
+        """Return ``(plan_record, payload)`` for this run.
+
+        A caller-supplied ``execution_plan_id`` pins an exact version (used by replay and by
+        audit-of-record). Otherwise the plan matching the KRI's *current* configuration is
+        used, generating one if the configuration has changed since the last run (R3).
+        """
+        if execution_plan_id is not None:
+            plan_record = self.audit_repo.get_plan_by_id(execution_plan_id)
+            if plan_record is None:
+                raise ValueError(f"Execution plan {execution_plan_id} not found.")
+            if plan_record.kri_id != kri_id:
+                raise ValueError(
+                    f"Execution plan {execution_plan_id} belongs to KRI {plan_record.kri_id}, "
+                    f"not KRI {kri_id}."
+                )
+            if not plan_record.is_valid:
+                raise ValueError(
+                    f"Execution plan {execution_plan_id} is not valid and cannot be executed: "
+                    f"{plan_record.validation_errors}"
+                )
+            return plan_record, plan_record.plan_payload or {}
+
+        plan_record = self.plan_coordinator.ensure_current_plan(kri_id, strict_stages=True)
+        return plan_record, plan_record.plan_payload or {}
+
     def execute_audit_run(self, req: AuditRunRequest) -> AuditRunDetailResponse:
-        """Execute a full audit run synchronously."""
+        """Execute a full audit run synchronously from its interpreted execution plan."""
         kri = self.kri_repo.get_kri_by_id(req.kri_id)
         if not kri:
             raise ValueError(f"KRI with ID {req.kri_id} not found.")
@@ -46,18 +73,14 @@ class AuditService:
             if c and c.lower() not in ("string", "all", "none", "null", "undefined", ""):
                 cleaned_cust = c
 
-        # Ensure execution plan exists
-        plan_record = self.audit_repo.get_latest_plan_for_kri(kri.id)
-        if not plan_record:
-            # Generate and validate plan automatically
-            structured_plan = PlanService.generate_plan_from_steps(kri)
-            val_result = PlanService.validate_plan(kri, structured_plan)
-            plan_record = self.audit_repo.create_execution_plan(
-                kri_id=kri.id,
-                plan_payload=structured_plan.model_dump(mode="json"),
-                is_valid=val_result.is_valid,
-                validation_errors=val_result.errors,
-            )
+        # The plan is the execution contract: resolve or regenerate it before the run.
+        try:
+            plan_record, plan_payload = self._resolve_plan(kri.id, req.execution_plan_id)
+        except PlanStaleError as exc:
+            raise ValueError(
+                f"KRI '{kri.identifier}' cannot be run because its test steps could not be "
+                f"interpreted into a runnable plan: {exc}"
+            ) from exc
 
         # Create Audit Run record in DB
         audit_run = self.audit_repo.create_audit_run(
@@ -75,7 +98,12 @@ class AuditService:
             db=self.db,
         )
 
-        provider_mode = "MockLLMProvider" if settings.use_mock_llm or not settings.is_azure_configured() else f"AzureOpenAI ({settings.azure_openai_deployment_name})"
+        provider_mode = (
+            "PlanExecutor"
+            if settings.is_plan_executor_enabled()
+            else ("MockLLMProvider" if settings.use_mock_llm or not settings.is_azure_configured()
+                  else f"AzureOpenAI ({settings.azure_openai_deployment_name})")
+        )
         run_logger.log_run_init(
             kri_identifier=kri.identifier,
             kri_name=kri.name,
@@ -84,8 +112,17 @@ class AuditService:
             customer_filter=cleaned_cust,
             provider_mode=provider_mode,
         )
-        if plan_record.plan_payload:
-            run_logger.log_plan_loaded(plan_record.plan_payload)
+        if plan_payload:
+            run_logger.log_plan_loaded(
+                {
+                    "version": plan_record.version,
+                    "plan_id": plan_record.id,
+                    "plan_hash": plan_record.plan_hash,
+                    "steps_hash": plan_record.steps_hash,
+                    "source": plan_record.source,
+                    **plan_payload,
+                }
+            )
 
         # Initialize Scoped Execution Context
         context = AuditExecutionContext(
@@ -99,11 +136,11 @@ class AuditService:
             end_date=req.end_date,
             customer_filter=cleaned_cust,
             run_logger=run_logger,
+            plan=plan_payload,
         )
 
         try:
-            # Execute Agent Orchestration Loop
-            result = self.orchestrator.run_audit(context)
+            result = self.orchestrator.run_audit(context, plan=plan_payload)
             metrics = result.get("metrics", {})
 
             # Update Audit Run to COMPLETED
@@ -133,6 +170,24 @@ class AuditService:
             )
 
         return self.get_audit_run_details(audit_run.id)
+
+    def replay_audit_run(self, run_id: int) -> AuditRunDetailResponse:
+        """Re-execute a past run's pinned plan against the same audit window."""
+        source = self.audit_repo.get_audit_run_by_id(run_id)
+        if not source:
+            raise ValueError(f"Audit run {run_id} not found.")
+        if not source.execution_plan_id:
+            raise ValueError(f"Audit run {run_id} has no pinned execution plan to replay.")
+
+        return self.execute_audit_run(
+            AuditRunRequest(
+                kri_id=source.kri_id,
+                start_date=source.start_date,
+                end_date=source.end_date,
+                customer_name=source.customer_filter,
+                execution_plan_id=source.execution_plan_id,
+            )
+        )
 
     def get_audit_run_details(self, audit_run_id: int) -> AuditRunDetailResponse:
         """Retrieve audit run details and summary metrics."""

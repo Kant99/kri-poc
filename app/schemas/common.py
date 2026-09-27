@@ -33,6 +33,54 @@ class FinancialEntityEnum(str, Enum):
     PURCHASE_ORDER = "PURCHASE_ORDER"
 
 
+class OperationTypeEnum(str, Enum):
+    """Approved audit operations that a test step may be interpreted into.
+
+    These are the only legal values for ``KRITestStep.operation`` and
+    ``PlannedStepItem.operation``. The value doubles as the key into
+    ``app.services.plan_service.OPERATION_TOOL_MAP``.
+    """
+
+    EXTRACT_POPULATION = "EXTRACT_POPULATION"
+    FETCH_DATA = "FETCH_DATA"
+    MATCH_RECORDS = "MATCH_RECORDS"
+    COMPARE_RECORDS = "COMPARE_RECORDS"
+    COMPARE_AMOUNTS = "COMPARE_AMOUNTS"
+    CALCULATE_DIFFERENCE = "CALCULATE_DIFFERENCE"
+    APPLY_THRESHOLD = "APPLY_THRESHOLD"
+    EVALUATE_THRESHOLD = "EVALUATE_THRESHOLD"
+    CALCULATE_METRICS = "CALCULATE_METRICS"
+    BUILD_EVIDENCE = "BUILD_EVIDENCE"
+    GENERATE_EXPLANATION = "GENERATE_EXPLANATION"
+    ANALYZE_DEBOOKINGS = "ANALYZE_DEBOOKINGS"
+    PREPARE = "PREPARE"
+
+
+class PlanInterpreterModeEnum(str, Enum):
+    """How natural language test steps are translated into a structured plan."""
+
+    RULES = "rules"
+    LLM = "llm"
+    HYBRID = "hybrid"
+
+
+class PlanSourceEnum(str, Enum):
+    """How a persisted execution plan was produced (provenance / R5)."""
+
+    RULES = "RULES"
+    LLM = "LLM"
+    MIXED = "MIXED"
+
+
+class PlanStepOriginEnum(str, Enum):
+    """How an individual planned step was produced (provenance / R5)."""
+
+    PINNED = "PINNED"
+    LLM = "LLM"
+    RULES = "RULES"
+    INJECTED = "INJECTED"
+
+
 class ThresholdTypeEnum(str, Enum):
     PERCENTAGE_DIFFERENCE = "PERCENTAGE_DIFFERENCE"
     ABSOLUTE_DIFFERENCE = "ABSOLUTE_DIFFERENCE"
@@ -53,6 +101,12 @@ class ExceptionTypeEnum(str, Enum):
     DUPLICATE_MATCH = "DUPLICATE_MATCH"
     AMBIGUOUS_MATCH = "AMBIGUOUS_MATCH"
     INVALID_IDENTIFIER = "INVALID_IDENTIFIER"
+    # Order Intake debooking / revenue recognition quality
+    PREMATURE_RECOGNITION = "PREMATURE_RECOGNITION"
+    UNSUPPORTED_RECOGNITION = "UNSUPPORTED_RECOGNITION"
+    BOOKING_QUALITY = "BOOKING_QUALITY"
+    DEBOOKING_CONCENTRATION = "DEBOOKING_CONCENTRATION"
+    ORPHAN_DEBOOKING = "ORPHAN_DEBOOKING"
 
 
 class SeverityEnum(str, Enum):

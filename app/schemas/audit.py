@@ -12,6 +12,10 @@ class AuditRunRequest(BaseModel):
     start_date: date = Field(..., description="Audit window start date (YYYY-MM-DD)")
     end_date: date = Field(..., description="Audit window end date (YYYY-MM-DD)")
     customer_name: Optional[str] = Field(None, description="Optional customer filter (leave null or omit for all customers)")
+    execution_plan_id: Optional[int] = Field(
+        None,
+        description="Pin a specific execution plan version. Omit to use the plan matching the KRI's current configuration.",
+    )
 
     model_config = ConfigDict(
         json_schema_extra={

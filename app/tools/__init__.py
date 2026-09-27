@@ -17,6 +17,9 @@ from app.schemas.tools import (
     BuildEvidenceOutput,
     GenerateExplanationInput,
     GenerateExplanationOutput,
+    AnalyzeOIDebookingsInput,
+    AnalyzeOIDebookingsOutput,
+    DebookingRule,
 )
 from app.tools.fetch_financial_data import fetch_financial_data_handler
 from app.tools.compare_records import compare_records_handler
@@ -25,15 +28,26 @@ from app.tools.apply_threshold import apply_threshold_handler
 from app.tools.calculate_kri_metrics import calculate_kri_metrics_handler
 from app.tools.build_evidence import build_evidence_handler
 from app.tools.generate_explanation import generate_explanation_handler
+from app.tools.analyze_oi_debookings import analyze_oi_debookings_handler
 
 
 def register_all_tools() -> None:
-    """Register all 7 deterministic audit tools into the central registry."""
+    """Register all deterministic audit tools into the central registry."""
+    # Bootstrapping the capability registry here guarantees the allowlists and the
+    # capability manifest are populated before any tool validates its arguments.
+    from app.services.data_source_bootstrap import register_all_entities
+
+    register_all_entities()
+
     # Tool 1: fetch_financial_data
     registry.register(
         RegisteredTool(
             name="fetch_financial_data",
-            description="Extract financial records (Order Intake or Purchase Orders) from approved source systems for a given date range.",
+            description=(
+                "Extract records for a registered business entity from a catalog data source "
+                "over a date window. The data source and entity must be bound in the capability "
+                "registry; the run's dates and filters are bound by the execution plan."
+            ),
             input_model=FetchFinancialDataInput,
             output_model=FetchFinancialDataOutput,
             handler=fetch_financial_data_handler,
@@ -44,7 +58,11 @@ def register_all_tools() -> None:
     registry.register(
         RegisteredTool(
             name="compare_records",
-            description="Match financial records deterministically between two scoped datasets (e.g. Order Intake vs Purchase Orders).",
+            description=(
+                "Match records deterministically between two scoped datasets on a shared field "
+                "resolved from the execution plan, identifying matched, unmatched and ambiguous "
+                "records."
+            ),
             input_model=CompareRecordsInput,
             output_model=CompareRecordsOutput,
             handler=compare_records_handler,
@@ -77,7 +95,10 @@ def register_all_tools() -> None:
     registry.register(
         RegisteredTool(
             name="calculate_kri_metrics",
-            description="Calculate aggregate KRI audit metrics including population values, exception counts, mismatch rates, and severity distributions.",
+            description=(
+                "Calculate aggregate KRI audit metrics for the population dataset bound by the "
+                "execution plan, including exception counts, rates and severity breakdowns."
+            ),
             input_model=CalculateKRIMetricsInput,
             output_model=CalculateKRIMetricsOutput,
             handler=calculate_kri_metrics_handler,
@@ -103,6 +124,22 @@ def register_all_tools() -> None:
             input_model=GenerateExplanationInput,
             output_model=GenerateExplanationOutput,
             handler=generate_explanation_handler,
+        )
+    )
+
+    # Tool 8: analyze_oi_debookings
+    registry.register(
+        RegisteredTool(
+            name="analyze_oi_debookings",
+            description=(
+                "Net the order intake population against order intake debookings per customer per "
+                "quarter, and report timing, support and concentration findings that indicate "
+                "booking-quality issues, premature revenue recognition, or recognition that was "
+                "never supported."
+            ),
+            input_model=AnalyzeOIDebookingsInput,
+            output_model=AnalyzeOIDebookingsOutput,
+            handler=analyze_oi_debookings_handler,
         )
     )
 

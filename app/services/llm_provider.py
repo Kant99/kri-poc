@@ -7,11 +7,20 @@ Defines the LLMProvider Protocol and implements:
 
 import json
 import logging
+import re
 import time
 from typing import Protocol, List, Dict, Any, Optional
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+#: Operations that are expanded per record by the executor rather than dispatched once.
+_PER_RECORD = {
+    "COMPARE_AMOUNTS",
+    "CALCULATE_DIFFERENCE",
+    "APPLY_THRESHOLD",
+    "EVALUATE_THRESHOLD",
+}
 
 
 class LLMProvider(Protocol):
@@ -21,8 +30,17 @@ class LLMProvider(Protocol):
         self,
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
+        plan: Optional[Dict[str, Any]] = None,
+        completed_tools: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Create response from LLM, returning tool calls or final message content."""
+        ...
+
+    def classify_steps(
+        self,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Classify test steps into approved operations. Returns raw JSON text."""
         ...
 
 
@@ -56,6 +74,8 @@ class AzureOpenAIProvider:
         self,
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
+        plan: Optional[Dict[str, Any]] = None,
+        completed_tools: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         start_time = time.time()
         kwargs: Dict[str, Any] = {
@@ -106,186 +126,195 @@ class AzureOpenAIProvider:
 
         raise RuntimeError(f"Azure OpenAI call failed after {max_retries} attempts: {last_error}") from last_error
 
+    def classify_steps(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Classify administrator test steps into approved operations."""
+        from app.services.prompt_loader import load_planner_prompt
+
+        response = self.create_response(
+            messages=[
+                {"role": "system", "content": load_planner_prompt()},
+                {
+                    "role": "user",
+                    "content": (
+                        "Classify each test step into exactly one approved operation.\n"
+                        "Return JSON: "
+                        '{"classifications": [{"id": <step id>, "operation": "...", '
+                        '"data_source_code": null, "entity_code": null, "match_field": null, '
+                        '"rationale": "..."}]}\n\n'
+                        + json.dumps(payload, indent=2, default=str)
+                    ),
+                },
+            ],
+            tools=None,
+        )
+        content = response.get("content") or ""
+        match = re.search(r"\{.*\}", content, re.DOTALL)
+        if not match:
+            return {}
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return {}
+
 
 class MockLLMProvider:
-    """Deterministic Mock LLM Provider simulating intelligent agent orchestration.
+    """Deterministic offline provider.
 
-    Interprets current conversation context and produces sequential tool calls
-    matching the planned test steps for the audit run.
+    When a plan is supplied, this walks the plan in order and emits exactly the tool calls the
+    plan declares, so offline mode is behaviourally identical to production. Without a plan
+    it degrades to answering text-only prompts, which is all the plan executor needs for a
+    ``PREPARE`` step.
     """
 
     def __init__(self):
         self.iteration = 0
 
+    # -- plan-driven tool emission -------------------------------------------
+
     def create_response(
         self,
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
+        plan: Optional[Dict[str, Any]] = None,
+        completed_tools: Optional[List[Any]] = None,
     ) -> Dict[str, Any]:
-        import re
+        """Create response from LLM, returning tool calls or final message content.
+
+        When ``plan`` is supplied, ``completed_tools`` carries the step numbers already
+        dispatched, so repeated use of the same tool is tracked per plan step rather than
+        per tool name.
+        """
         self.iteration += 1
 
-        # Extract audit window from user message
-        start_date = "2026-01-01"
-        end_date = "2026-03-31"
-        filters: Dict[str, Any] = {}
-        for m in messages:
-            if m.get("role") == "user":
-                content = m.get("content", "")
-                date_match = re.search(r"Audit Window:\s*(\d{4}-\d{2}-\d{2})\s*to\s*(\d{4}-\d{2}-\d{2})", content)
-                if date_match:
-                    start_date = date_match.group(1)
-                    end_date = date_match.group(2)
-                cust_match = re.search(r"Customer Filter:\s*([^\n]+)", content)
-                if cust_match:
-                    cust_val = cust_match.group(1).strip()
-                    if cust_val and cust_val.upper() not in ("ALL", "NONE", "NULL", "STRING", "UNDEFINED"):
-                        filters["customer_name"] = cust_val
+        if plan:
+            return self._next_planned_call(plan, completed_tools or [], messages)
 
-        # Check what tool outputs exist in message history
-        tool_responses = [m for m in messages if m.get("role") == "tool"]
-        tool_names_called = []
-        for tr in tool_responses:
-            name = tr.get("name")
-            if name:
-                tool_names_called.append(name)
-
-        # Inspect tool response contents to extract dataset references
-        orders_ds = "dataset_orders_001"
-        pos_ds = "dataset_pos_001"
-        comp_ref = "comp_001"
-        for tr in tool_responses:
-            try:
-                content = json.loads(tr.get("content", "{}"))
-                if content.get("entity") == "ORDER_INTAKE" and content.get("dataset_reference"):
-                    orders_ds = content.get("dataset_reference")
-                elif content.get("entity") == "PURCHASE_ORDER" and content.get("dataset_reference"):
-                    pos_ds = content.get("dataset_reference")
-                elif content.get("comparison_reference"):
-                    comp_ref = content.get("comparison_reference")
-            except Exception:
-                pass
-
-        # Step 1: Extract Order Intake data
-        if "fetch_financial_data" not in tool_names_called:
-            return {
-                "role": "assistant",
-                "content": "Extracting Order Intake records from SAP ECC for the audit period.",
-                "tool_calls": [
-                    {
-                        "id": f"call_extract_orders_{self.iteration}",
-                        "type": "function",
-                        "function": {
-                            "name": "fetch_financial_data",
-                            "arguments": json.dumps({
-                                "source_system": "SAP_ECC",
-                                "entity": "ORDER_INTAKE",
-                                "start_date": start_date,
-                                "end_date": end_date,
-                                "filters": filters,
-                            }),
-                        },
-                    }
-                ],
-            }
-
-        # Step 2: Extract Purchase Orders data
-        order_fetches = [tr for tr in tool_responses if "ORDER_INTAKE" in tr.get("content", "")]
-        po_fetches = [tr for tr in tool_responses if "PURCHASE_ORDER" in tr.get("content", "")]
-        if not po_fetches:
-            return {
-                "role": "assistant",
-                "content": "Extracting Purchase Orders from Red Box PO for the audit period.",
-                "tool_calls": [
-                    {
-                        "id": f"call_extract_pos_{self.iteration}",
-                        "type": "function",
-                        "function": {
-                            "name": "fetch_financial_data",
-                            "arguments": json.dumps({
-                                "source_system": "RED_BOX_PO",
-                                "entity": "PURCHASE_ORDER",
-                                "start_date": start_date,
-                                "end_date": end_date,
-                                "filters": filters,
-                            }),
-                        },
-                    }
-                ],
-            }
-
-        # Step 3: Match records
-        if "compare_records" not in tool_names_called:
-            return {
-                "role": "assistant",
-                "content": "Matching order intake records with purchase orders on order_id.",
-                "tool_calls": [
-                    {
-                        "id": f"call_compare_{self.iteration}",
-                        "type": "function",
-                        "function": {
-                            "name": "compare_records",
-                            "arguments": json.dumps({
-                                "left_dataset_reference": orders_ds,
-                                "right_dataset_reference": pos_ds,
-                                "match_configuration": {
-                                    "left_field": "order_id",
-                                    "right_field": "order_id",
-                                    "fallback_field": "po_reference",
-                                },
-                            }),
-                        },
-                    }
-                ],
-            }
-
-        # Step 4: Calculate aggregate KRI metrics
-        if "calculate_kri_metrics" not in tool_names_called:
-            return {
-                "role": "assistant",
-                "content": "Calculating aggregate KRI metrics and exception summaries.",
-                "tool_calls": [
-                    {
-                        "id": f"call_metrics_{self.iteration}",
-                        "type": "function",
-                        "function": {
-                            "name": "calculate_kri_metrics",
-                            "arguments": json.dumps({
-                                "audit_run_reference": "current_run",
-                                "calculation_policy": {
-                                    "mismatch_value_definition": "ORDER_VALUE_OF_QUALIFYING_EXCEPTIONS"
-                                },
-                            }),
-                        },
-                    }
-                ],
-            }
-
-        # Step 5: Build evidence packages
-        if "build_evidence" not in tool_names_called:
-            return {
-                "role": "assistant",
-                "content": "Building reproducible evidence records for all identified exceptions.",
-                "tool_calls": [
-                    {
-                        "id": f"call_evidence_{self.iteration}",
-                        "type": "function",
-                        "function": {
-                            "name": "build_evidence",
-                            "arguments": json.dumps({
-                                "audit_run_reference": "current_run",
-                            }),
-                        },
-                    }
-                ],
-            }
-
-        # Step 6: Complete workflow
         return {
             "role": "assistant",
-            "content": "Audit workflow execution completed successfully. All test steps interpreted, tools executed deterministically, metrics computed, and evidence packages stored.",
+            "content": self._text_summary(messages),
             "tool_calls": None,
         }
+
+    def _next_planned_call(
+        self,
+        plan: Dict[str, Any],
+        completed_tools: List[Any],
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """Return the first unplanned tool step of the plan, in order."""
+        window = self._window_from_messages(messages)
+        done = {str(c) for c in completed_tools}
+        aliases: Dict[str, str] = {}
+        comparisons: Dict[str, str] = {}
+
+        for step in sorted(plan.get("steps", []), key=lambda s: s.get("step_number", 0)):
+            tool_name = step.get("tool_name")
+            operation = step.get("operation")
+            step_number = step.get("step_number")
+            if not tool_name or tool_name == "prepare" or operation in _PER_RECORD:
+                continue
+            if str(step_number) in done:
+                continue
+
+            arguments = self._bind_arguments(step, window, aliases, comparisons)
+            if tool_name == "fetch_financial_data":
+                reference = f"mock_{tool_name}_{step_number}"
+                output_alias = (step.get("parameters") or {}).get("dataset_alias")
+                if output_alias:
+                    aliases[output_alias] = reference
+            if tool_name == "compare_records":
+                reference = f"mock_{tool_name}_{step_number}"
+                comparison_alias = (step.get("parameters") or {}).get("comparison_alias")
+                if comparison_alias:
+                    comparisons[comparison_alias] = reference
+
+            return {
+                "role": "assistant",
+                "content": f"Executing planned step {step.get('step_number')}: {operation}.",
+                "tool_calls": [
+                    {
+                        "id": f"call_plan_{step.get('step_number')}_{self.iteration}",
+                        "type": "function",
+                        "function": {
+                            "name": tool_name,
+                            "arguments": json.dumps(arguments),
+                        },
+                    }
+                ],
+            }
+
+        return {
+            "role": "assistant",
+            "content": (
+                "All planned steps have been dispatched. Execution complete."
+            ),
+            "tool_calls": None,
+        }
+
+    def _bind_arguments(
+        self,
+        step: Dict[str, Any],
+        window: Dict[str, Any],
+        aliases: Dict[str, str],
+        comparisons: Dict[str, str],
+    ) -> Dict[str, Any]:
+        params = dict(step.get("parameters") or {})
+        tool_name = step["tool_name"]
+
+        if tool_name == "fetch_financial_data":
+            return {
+                "data_source_code": params.get("data_source_code") or step.get("data_source_code"),
+                "entity_code": params.get("entity_code") or step.get("entity_code"),
+                "start_date": window["start_date"],
+                "end_date": window["end_date"],
+                "filters": window["filters"],
+            }
+        if tool_name == "compare_records":
+            return {
+                "left_dataset_reference": aliases.get(params.get("left_alias"), "dataset_left"),
+                "right_dataset_reference": aliases.get(params.get("right_alias"), "dataset_right"),
+                "match_configuration": params.get("match_configuration") or {},
+            }
+        if tool_name in ("calculate_kri_metrics", "build_evidence"):
+            return {"audit_run_reference": "current_run", **params}
+        return params
+
+    @staticmethod
+    def _window_from_messages(messages: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        messages = messages or []
+        start_date, end_date, filters = "2026-01-01", "2026-03-31", {}
+        for message in messages:
+            if message.get("role") != "user":
+                continue
+            content = message.get("content", "")
+            date_match = re.search(
+                r"Audit Window:\s*(\d{4}-\d{2}-\d{2})\s*to\s*(\d{4}-\d{2}-\d{2})", content
+            )
+            if date_match:
+                start_date, end_date = date_match.group(1), date_match.group(2)
+            cust_match = re.search(r"Customer Filter:\s*([^\n]+)", content)
+            if cust_match:
+                value = cust_match.group(1).strip()
+                if value and value.upper() not in ("ALL", "NONE", "NULL", "STRING", "UNDEFINED"):
+                    filters["customer_name"] = value
+        return {"start_date": start_date, "end_date": end_date, "filters": filters}
+
+    @staticmethod
+    def _text_summary(messages: List[Dict[str, Any]]) -> str:
+        for message in reversed(messages or []):
+            if message.get("role") == "user":
+                return (
+                    "Offline analysis: the audit workflow is executed deterministically from the "
+                    f"stored execution plan. Requested analysis: "
+                    f"{str(message.get('content', ''))[:400]}"
+                )
+        return "Offline analysis completed."
+
+    # -- step classification --------------------------------------------------
+
+    def classify_steps(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Offline classification is unavailable: the interpreter falls back to rules."""
+        return {}
 
 
 def get_llm_provider() -> LLMProvider:

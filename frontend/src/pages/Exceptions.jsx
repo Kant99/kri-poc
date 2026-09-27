@@ -81,7 +81,7 @@ export function ExceptionDetail({ exc, kri, run, updateExc, sendToPlanner, notif
         <tbody>
           {evidenceList.map((ev, i) => (
             <tr key={i}>
-              <td><SourceChip id={ev.source || 'sap'} /></td>
+              <td><SourceChip id={ev.source || 'sap_ecc'} /></td>
               <td>{ev.record || ''}</td>
               <td className="wrap">{ev.value || ''}</td>
             </tr>
