@@ -8,6 +8,7 @@ export const SOURCES = [
   { id: 'sap_ecc', name: 'SAP ECC', kind: 'ERP (OI / YCA report, WBS, revenue)' },
   { id: 'obs', name: 'Order Booking System', kind: 'Order booking & CPO capture' },
   { id: 'red_box_po', name: 'Red Box / PO', kind: 'Centralized PO Engine' },
+  { id: 'scrm', name: 'SCRM / Salesforce', kind: 'Commercial CRM & Opportunities' },
   { id: 'sapiens', name: 'Sapiens', kind: 'Policy Core Administration' },
   { id: 'blue_planet', name: 'Blue Planet', kind: 'Billing & Revenue Platform' },
   { id: 'ems_sharepoint', name: 'EMS / SharePoint', kind: 'Contract repository & storage' },
