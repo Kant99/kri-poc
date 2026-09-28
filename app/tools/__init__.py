@@ -20,6 +20,9 @@ from app.schemas.tools import (
     AnalyzeOIDebookingsInput,
     AnalyzeOIDebookingsOutput,
     DebookingRule,
+    AnalyzeWBSIntegrityInput,
+    AnalyzeWBSIntegrityOutput,
+    WBSRule,
 )
 from app.tools.fetch_financial_data import fetch_financial_data_handler
 from app.tools.compare_records import compare_records_handler
@@ -29,6 +32,7 @@ from app.tools.calculate_kri_metrics import calculate_kri_metrics_handler
 from app.tools.build_evidence import build_evidence_handler
 from app.tools.generate_explanation import generate_explanation_handler
 from app.tools.analyze_oi_debookings import analyze_oi_debookings_handler
+from app.tools.analyze_wbs_integrity import analyze_wbs_integrity_handler
 
 
 def register_all_tools() -> None:
@@ -140,6 +144,22 @@ def register_all_tools() -> None:
             input_model=AnalyzeOIDebookingsInput,
             output_model=AnalyzeOIDebookingsOutput,
             handler=analyze_oi_debookings_handler,
+        )
+    )
+
+    # Tool 9: analyze_wbs_integrity
+    registry.register(
+        RegisteredTool(
+            name="analyze_wbs_integrity",
+            description=(
+                "Reconcile Work Breakdown Structure (WBS) master records, commercial opportunities (SCRM), "
+                "Order Intake, Customer Purchase Orders, recognized revenue (YRA report), and actual costs "
+                "(YCA report) to detect multi-opportunity commingling, multi-customer commingling, missing POs, "
+                "revenue over-recognition, and orphan cost parking."
+            ),
+            input_model=AnalyzeWBSIntegrityInput,
+            output_model=AnalyzeWBSIntegrityOutput,
+            handler=analyze_wbs_integrity_handler,
         )
     )
 

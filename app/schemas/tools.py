@@ -239,3 +239,74 @@ class AnalyzeOIDebookingsOutput(BaseModel):
     net_order_intake_value: float = 0.0
     counts_by_code: Dict[str, int] = Field(default_factory=dict)
     message: Optional[str] = None
+
+
+# Tool 9: analyze_wbs_integrity
+class WBSRule(BaseModel):
+    """Declarative integrity check rule for WBS usage accuracy."""
+    code: str = Field(
+        ...,
+        description=(
+            "MULTI_OPPORTUNITY_COMMINGLING | MULTI_CUSTOMER_COMMINGLING | "
+            "UNCOVERED_WBS | REVENUE_OVER_RECOGNITION | ORPHAN_COST_PARKING | CROSS_BOOKING_MISMATCH"
+        ),
+    )
+    severity: str = "HIGH"
+    threshold: Optional[float] = None
+    create_exception: bool = True
+
+
+class WBSIntegritySummary(BaseModel):
+    wbs_element: str
+    project_name: Optional[str] = None
+    opportunity_ids: List[str] = Field(default_factory=list)
+    customer_names: List[str] = Field(default_factory=list)
+    order_intake_amount: float = 0.0
+    customer_po_amount: float = 0.0
+    yra_revenue_amount: float = 0.0
+    yca_cost_amount: float = 0.0
+    is_commingled: bool = False
+    is_multi_customer: bool = False
+    is_uncovered_po: bool = False
+    is_revenue_exceeded: bool = False
+    is_orphan_cost: bool = False
+    exposure_amount: float = 0.0
+    findings: List[str] = Field(default_factory=list)
+
+
+class AnalyzeWBSIntegrityInput(BaseModel):
+    audit_run_reference: str = Field(..., description="Audit run reference ID")
+    wbs_dataset_reference: Optional[str] = Field(None, description="WBS master dataset reference")
+    opportunities_dataset_reference: Optional[str] = Field(None, description="SCRM opportunities dataset reference")
+    order_intake_dataset_reference: Optional[str] = Field(None, description="Order Intake dataset reference")
+    customer_pos_dataset_reference: Optional[str] = Field(None, description="Purchase orders dataset reference")
+    yra_revenue_dataset_reference: Optional[str] = Field(None, description="YRA revenue report dataset reference")
+    yca_cost_dataset_reference: Optional[str] = Field(None, description="YCA cost report dataset reference")
+    max_opportunities_per_wbs: int = Field(default=1, description="Maximum permitted opportunities per WBS")
+    revenue_tolerance_percentage: float = Field(
+        default=0.05,
+        description="Permitted percentage variance tolerance for YRA revenue > Order Intake (e.g. 0.05 = 5%)",
+    )
+    revenue_tolerance_amount: float = Field(
+        default=5000.0,
+        description="Permitted absolute currency tolerance for YRA revenue > Order Intake",
+    )
+    rules: List[WBSRule] = Field(default_factory=list)
+
+
+class AnalyzeWBSIntegrityOutput(BaseModel):
+    tool_name: str = "analyze_wbs_integrity"
+    status: str = "SUCCESS"
+    audit_run_reference: str
+    wbs_elements_analyzed: int = 0
+    commingled_wbs_count: int = 0
+    multi_customer_wbs_count: int = 0
+    uncovered_po_wbs_count: int = 0
+    revenue_over_recognized_count: int = 0
+    orphan_cost_wbs_count: int = 0
+    total_exposure_amount: float = 0.0
+    wbs_summaries: List[WBSIntegritySummary] = Field(default_factory=list)
+    findings: List[Dict[str, Any]] = Field(default_factory=list)
+    counts_by_code: Dict[str, int] = Field(default_factory=dict)
+    message: Optional[str] = None
+

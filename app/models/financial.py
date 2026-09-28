@@ -24,6 +24,8 @@ class OrderIntake(Base):
     order_amount = Column(Float, nullable=False)
     currency = Column(String(10), default="USD", nullable=False)
     po_reference = Column(String(100), nullable=True, index=True)
+    wbs_element = Column(String(100), nullable=True, index=True)
+    opportunity_id = Column(String(100), nullable=True, index=True)
     source_system = Column(String(50), default="SAP_ECC", nullable=False, index=True)
     status = Column(String(50), default="BOOKED", nullable=False)  # BOOKED, CANCELLED, PENDING
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
@@ -44,6 +46,8 @@ class PurchaseOrder(Base):
     po_date = Column(Date, nullable=False, index=True)
     po_amount = Column(Float, nullable=False)
     currency = Column(String(10), default="USD", nullable=False)
+    wbs_element = Column(String(100), nullable=True, index=True)
+    opportunity_id = Column(String(100), nullable=True, index=True)
     source_system = Column(String(50), default="RED_BOX_PO", nullable=False, index=True)
     status = Column(String(50), default="APPROVED", nullable=False)  # APPROVED, REJECTED, PENDING
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
@@ -93,3 +97,73 @@ class OrderIntakeDebooking(Base):
     __table_args__ = (
         Index("ix_debooking_customer_dates", "customer_name", "debooking_date"),
     )
+
+
+class WBSElement(Base):
+    """Work Breakdown Structure (WBS) master records (e.g. from SAP Project System - PS)."""
+    __tablename__ = "wbs_elements"
+
+    id = Column(Integer, primary_key=True, index=True)
+    wbs_code = Column(String(100), unique=True, nullable=False, index=True)
+    project_name = Column(String(255), nullable=False)
+    responsible_person = Column(String(150), nullable=True)
+    customer_name = Column(String(255), nullable=True, index=True)
+    budget_amount = Column(Float, default=0.0, nullable=False)
+    source_system = Column(String(50), default="SAP_ECC", nullable=False, index=True)
+    status = Column(String(50), default="ACTIVE", nullable=False)  # ACTIVE, CLOSED, TECO
+    created_date = Column(Date, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+
+class SCRMOpportunity(Base):
+    """Commercial Opportunity and Contract records from SCRM / CRM."""
+    __tablename__ = "scrm_opportunities"
+
+    id = Column(Integer, primary_key=True, index=True)
+    opportunity_id = Column(String(100), unique=True, nullable=False, index=True)
+    contract_id = Column(String(100), nullable=True, index=True)
+    opportunity_name = Column(String(255), nullable=False)
+    customer_name = Column(String(255), nullable=False, index=True)
+    planned_value = Column(Float, nullable=False)
+    currency = Column(String(10), default="USD", nullable=False)
+    status = Column(String(50), default="WON", nullable=False, index=True)  # WON, PIPELINE, LOST, CANCELLED
+    close_date = Column(Date, nullable=False, index=True)
+    source_system = Column(String(50), default="SCRM", nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+
+class YRARevenueRecord(Base):
+    """YRA Revenue report records from SAP SD/FI."""
+    __tablename__ = "yra_revenue_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+    revenue_id = Column(String(100), unique=True, nullable=False, index=True)
+    wbs_element = Column(String(100), nullable=False, index=True)
+    opportunity_id = Column(String(100), nullable=True, index=True)
+    billing_doc = Column(String(100), nullable=True, index=True)
+    customer_name = Column(String(255), nullable=False, index=True)
+    revenue_date = Column(Date, nullable=False, index=True)
+    revenue_amount = Column(Float, nullable=False)
+    currency = Column(String(10), default="USD", nullable=False)
+    fiscal_period = Column(String(20), nullable=False, index=True)
+    source_system = Column(String(50), default="SAP_ECC", nullable=False, index=True)
+    status = Column(String(50), default="POSTED", nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+
+class YCACostRecord(Base):
+    """YCA Cost report records from SAP CO."""
+    __tablename__ = "yca_cost_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+    cost_id = Column(String(100), unique=True, nullable=False, index=True)
+    wbs_element = Column(String(100), nullable=False, index=True)
+    cost_element = Column(String(100), nullable=False, index=True)  # LABOR, MATERIAL, SUBCONTRACT, TRAVEL
+    vendor_or_person = Column(String(255), nullable=True)
+    cost_date = Column(Date, nullable=False, index=True)
+    cost_amount = Column(Float, nullable=False)
+    currency = Column(String(10), default="USD", nullable=False)
+    fiscal_period = Column(String(20), nullable=False, index=True)
+    source_system = Column(String(50), default="SAP_ECC", nullable=False, index=True)
+    status = Column(String(50), default="POSTED", nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
