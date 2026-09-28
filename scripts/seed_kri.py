@@ -64,6 +64,12 @@ DATA_SOURCE_CATALOG = [
         "system_type": "DOC_STORAGE",
         "description": "Contract repository and documentation management.",
     },
+    {
+        "name": "SCRM / Salesforce",
+        "code": "SCRM",
+        "system_type": "CRM",
+        "description": "Commercial opportunities, contracts, customer accounts, and sales pipeline management.",
+    },
 ]
 
 #: Natural language test steps. Each names its data source explicitly so the interpreter's
@@ -259,6 +265,9 @@ def seed_kri_configuration(db: Session) -> int:
     # A second, independent KRI exercises the debooking analysis. It is seeded after the
     # primary so the primary stays the one callers get back.
     seed_debooking_kri(kri_repo, pa_o2c, ds_sap)
+
+    # A third KRI monitors Work Breakdown Structure (WBS) usage accuracy and multi-opportunity integrity.
+    seed_wbs_kri(kri_repo, pa_o2c, sources)
     return kri_id
 
 
@@ -370,6 +379,143 @@ def seed_debooking_kri(kri_repo: KRIRepository, process_area, ds_sap) -> int:
         plan_record = coordinator.ensure_current_plan(kri.id)
         print(
             f"Interpreted execution plan v{plan_record.version} "
+            f"({len((plan_record.plan_payload or {}).get('steps', []))} steps, "
+            f"source={plan_record.source})."
+        )
+    except PlanStaleError as exc:
+        raise RuntimeError(
+            f"Seeded KRI '{kri.identifier}' could not be interpreted into a runnable plan: {exc}"
+        ) from exc
+
+    kri_repo.update_status(kri.id, "ACTIVE")
+    print(f"Successfully seeded and activated KRI {kri.identifier} (ID: {kri.id}).")
+    return kri.id
+
+
+WBS_TEST_STEPS = [
+    (1, "Extract WBS Master Elements", "Extract the population of WBS Master elements from SAP ECC."),
+    (2, "Extract Commercial Opportunities", "Extract the population of Commercial Opportunities from SCRM."),
+    (3, "Extract Order Intake Bookings", "Extract the population of Order Intake records from SAP ECC."),
+    (4, "Extract Customer Purchase Orders", "Extract the population of Purchase Orders from Red Box PO."),
+    (5, "Extract YRA Revenue Report", "Extract the population of YRA Revenue report records from SAP ECC."),
+    (6, "Extract YCA Cost Report", "Extract the population of YCA Cost report records from SAP ECC."),
+    (
+        7,
+        "Analyze WBS Usage Accuracy and Opportunity Integrity",
+        "Reconcile and analyze WBS usage accuracy across opportunities, order intake, customer purchase orders, "
+        "YRA revenue, and YCA cost reports. Flag multi-opportunity commingling, multi-customer commingling, "
+        "uncovered purchase orders, and revenue exceeding order intake beyond the configured tolerance.",
+    ),
+    (
+        8,
+        "Compile Metrics and Evidence",
+        "Calculate aggregate KRI metrics and compile reproducible evidence packages for all identified exceptions.",
+    ),
+]
+
+
+def seed_wbs_kri(kri_repo: KRIRepository, process_area, sources: dict) -> int:
+    """Seed KRI-WBS-001: Work Breakdown Structure Usage Accuracy & Opportunity Integrity."""
+    kri_name = "Work Breakdown Structure (WBS) Usage Accuracy and Multi-Opportunity Integrity"
+    existing = kri_repo.get_kri_by_identifier("KRI-WBS-001")
+    ds_sap = sources["SAP_ECC"]
+    ds_scrm = sources["SCRM"]
+    ds_po = sources["RED_BOX_PO"]
+
+    if existing:
+        kri_repo.update_kri(
+            existing.id,
+            KRIUpdate(
+                name=kri_name,
+                process_area_id=process_area.id,
+                indicator_type=IndicatorTypeEnum.LEADING,
+            ),
+        )
+        kri = existing
+        print(f"KRI {existing.identifier} already exists (ID: {existing.id}), synchronized.")
+    else:
+        kri = kri_repo.create_kri(
+            KRICreate(
+                identifier="KRI-WBS-001",
+                name=kri_name,
+                process_area_id=process_area.id,
+                indicator_type=IndicatorTypeEnum.LEADING,
+                risk_description=(
+                    "Risk of distorted project-level financial tracking, undetected project cost overruns, "
+                    "inability to reconcile customer purchase orders, and revenue recognition non-compliance "
+                    "(IFRS 15 / ASC 606) caused by multiple distinct customer projects, contracts (SCRM), or "
+                    "commercial opportunities recorded under a single WBS element, or financial actuals "
+                    "(YRA revenue, YCA cost) posted without valid Order Intake or Customer PO backing."
+                ),
+                end_goal=(
+                    "Continuously ensure 100% of WBS elements maintain 1-to-1 fidelity with approved commercial "
+                    "opportunities, that all recognized revenue (YRA) and actual costs (YCA) trace to valid Order "
+                    "Intake and Customer POs, and that no multi-customer commingling occurs."
+                ),
+                data_source_ids=[ds_sap.id, ds_scrm.id, ds_po.id],
+            )
+        )
+
+        for step_number, title, instruction in WBS_TEST_STEPS:
+            kri_repo.add_test_step(
+                kri_id=kri.id,
+                step_in=KRITestStepCreate(
+                    step_number=step_number,
+                    title=title,
+                    instruction=instruction,
+                    is_active=True,
+                ),
+            )
+
+        kri_repo.create_or_update_schedule(
+            kri_id=kri.id,
+            schedule_in=KRIScheduleCreate(
+                run_frequency="DAILY",
+                fetch_data_delay_days=1,
+                align_to_close_calendar=True,
+                population_percentage=100.0,
+            ),
+        )
+
+        kri_repo.add_reviewer(
+            kri_id=kri.id,
+            reviewer_in=ReviewerCreate(
+                reviewer_name="Project Controlling & Audit Lead",
+                reviewer_email="project-audit@example.com",
+                human_review_setting="ALL_EXCEPTIONS",
+                lifecycle_status="ACTIVE",
+            ),
+        )
+
+    # Ensure active thresholds exist
+    if not kri.thresholds:
+        kri_repo.add_threshold(
+            kri_id=kri.id,
+            threshold_in=KRIThresholdCreate(
+                name="5% Revenue Over-Recognition Tolerance Limit",
+                threshold_type=ThresholdTypeEnum.PERCENTAGE_DIFFERENCE,
+                operator=ComparisonOperatorEnum.GREATER_THAN,
+                threshold_value=5.0,
+                unit="%",
+                is_active=True,
+            ),
+        )
+        kri_repo.add_threshold(
+            kri_id=kri.id,
+            threshold_in=KRIThresholdCreate(
+                name="Single Opportunity per WBS Limit",
+                threshold_type=ThresholdTypeEnum.ABSOLUTE_DIFFERENCE,
+                operator=ComparisonOperatorEnum.GREATER_THAN,
+                threshold_value=1.0,
+                is_active=True,
+            ),
+        )
+
+    coordinator = PlanCoordinator(kri_repo.db)
+    try:
+        plan_record = coordinator.ensure_current_plan(kri.id)
+        print(
+            f"Interpreted execution plan v{plan_record.version} for {kri.identifier} "
             f"({len((plan_record.plan_payload or {}).get('steps', []))} steps, "
             f"source={plan_record.source})."
         )

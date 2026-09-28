@@ -17,7 +17,15 @@ from scripts.seed_kri import seed_kri_configuration
 from scripts.seed_data import seed_financial_data, verify_seeded_data
 from app.models.kri import KRI, ProcessArea, DataSource, DataSourceEntity
 from app.models.audit import ExecutionPlan
-from app.models.financial import OrderIntake, PurchaseOrder
+from app.models.financial import (
+    OrderIntake,
+    PurchaseOrder,
+    OrderIntakeDebooking,
+    WBSElement,
+    SCRMOpportunity,
+    YRARevenueRecord,
+    YCACostRecord,
+)
 
 
 def reset_and_seed_database() -> None:
@@ -46,6 +54,10 @@ def reset_and_seed_database() -> None:
         kri_count = db.query(KRI).count()
         orders_count = db.query(OrderIntake).count()
         pos_count = db.query(PurchaseOrder).count()
+        wbs_count = db.query(WBSElement).count()
+        opp_count = db.query(SCRMOpportunity).count()
+        yra_count = db.query(YRARevenueRecord).count()
+        yca_count = db.query(YCACostRecord).count()
         queryable = db.query(DataSource).filter(DataSource.is_queryable == True).count()
 
         print("\n==================================================")
@@ -55,8 +67,12 @@ def reset_and_seed_database() -> None:
         print(f"Data Sources Seeded    : {ds_count} ({queryable} queryable, {binding_count} entity bindings)")
         print(f"KRIs Configured        : {kri_count} (Primary Active KRI ID: {kri_id})")
         print(f"Execution Plans Stored : {plan_count}")
+        print(f"WBS Elements           : {wbs_count} (SAP ECC)")
+        print(f"Commercial Opps (SCRM) : {opp_count} (SCRM)")
         print(f"Order Intake Records   : {orders_count} (SAP ECC)")
         print(f"Purchase Orders        : {pos_count} (Red Box PO)")
+        print(f"YRA Revenue Records    : {yra_count} (SAP ECC)")
+        print(f"YCA Cost Records       : {yca_count} (SAP ECC)")
         print("==================================================")
         print("Database is ready for audit execution!")
 

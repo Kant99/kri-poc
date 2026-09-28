@@ -49,6 +49,8 @@ _RULES: List[Tuple[str, str]] = [
     (r"\b(debookings?|debit notes?|reversals?|credit notes?|cancellations?)\b.*\b(order intake|oi|quarter|net|order|orders|customer|customers|bookings?)\b"
      r"|\b(order intake|oi|order|orders|bookings?)\b.*\b(debookings?|debit notes?|reversals?|credit notes?|cancellations?)\b"
      r"|\bnet\b.*\b(order intake|oi)\b.*\b(quarter|value)\b", "ANALYZE_DEBOOKINGS"),
+    (r"\b(wbs|work breakdown structure)\b.*\b(accurac|integrit|commingl|usage|opportunit|scrm|yra|yca|reconcil|analys|analyz)\b"
+     r"|\b(reconcile|analyse|analyze|assess|evaluate)\b.*\b(wbs|work breakdown structure)\b", "ANALYZE_WBS_INTEGRITY"),
     (r"\b(metric|kpi|kri metric|aggregate|rate|exception rate|compile metrics)\b", "CALCULATE_METRICS"),
     (r"\b(evidence|evidence package|reproducib|document the finding|proof)\b", "BUILD_EVIDENCE"),
     (r"\b(explain|explanation|narrative|write.?up|rationale)\b", "GENERATE_EXPLANATION"),
@@ -308,20 +310,26 @@ class PlanInterpreter:
             return self._build_debooking_analysis_steps(
                 kri, step, text, classification, next_number, extracted
             )
+        if operation == "ANALYZE_WBS_INTEGRITY":
+            return self._build_wbs_integrity_analysis_steps(
+                kri, step, text, classification, next_number, extracted
+            )
         if operation in ("MATCH_RECORDS", "COMPARE_RECORDS"):
             return [self._build_match_step(kri, step, text, classification, next_number)]
         if operation in ("APPLY_THRESHOLD", "EVALUATE_THRESHOLD"):
-            # If the plan already contains a self-comparing stage (e.g. ANALYZE_DEBOOKINGS),
+            # If the plan already contains a self-comparing stage (e.g. ANALYZE_DEBOOKINGS or ANALYZE_WBS_INTEGRITY),
             # no separate compare_records step exists and therefore no "comparison" alias is
             # ever populated at run time.  Emitting a per-record APPLY_THRESHOLD step in this
             # situation would always crash the executor.
-            #
-            # Instead, fold the resolved percentage limit back into the self-comparing step
-            # (updating customer_quarter_ratio_threshold and the BOOKING_QUALITY rule) so the
-            # analysis tool enforces exactly what the user wrote.
-            #
-            # For two-population plans (Order vs PO, three-way match, etc.) the regular
-            # per-record path is still used because a comparison alias will be present.
+            wbs_step = next(
+                (s for s in planned if s.operation == "ANALYZE_WBS_INTEGRITY"), None
+            )
+            if wbs_step is not None:
+                tol_value = self._ratio_threshold_from_text(text)
+                if tol_value != 0.15:
+                    wbs_step.parameters["revenue_tolerance_percentage"] = tol_value
+                return []
+
             debooking_step = next(
                 (s for s in planned if s.operation == "ANALYZE_DEBOOKINGS"), None
             )
@@ -603,6 +611,49 @@ class PlanInterpreter:
             )
         )
         return items
+
+    def _build_wbs_integrity_analysis_steps(
+        self,
+        kri: KRI,
+        step: KRITestStep,
+        text: str,
+        classification: Dict[str, Any],
+        next_number: int,
+        extracted: Optional[Dict[str, str]] = None,
+    ) -> List[PlannedStepItem]:
+        tol_pct = 0.05
+        tol_amt = 5000.0
+        if kri and kri.thresholds:
+            for th in kri.thresholds:
+                if th.threshold_value is not None:
+                    if th.unit == "%" or "PERCENT" in (th.threshold_type or "") or "variance" in (th.name or "").lower():
+                        tol_pct = round(float(th.threshold_value) / 100.0, 4)
+                        break
+
+        item = PlannedStepItem(
+            step_number=next_number,
+            operation="ANALYZE_WBS_INTEGRITY",
+            tool_name="analyze_wbs_integrity",
+            parameters={
+                "wbs_alias": "pop_wbs_master",
+                "opportunities_alias": "pop_scrm_opportunity",
+                "order_intake_alias": "pop_order_intake",
+                "customer_pos_alias": "pop_purchase_order",
+                "yra_revenue_alias": "pop_yra_revenue",
+                "yca_cost_alias": "pop_yca_cost",
+                "max_opportunities_per_wbs": 1,
+                "revenue_tolerance_percentage": tol_pct,
+                "revenue_tolerance_amount": tol_amt,
+            },
+            data_source_code="SAP_ECC",
+            entity_code="WBS_MASTER",
+            description="Reconcile WBS elements across Opportunities, Order Intake, POs, YRA Revenue, and YCA Cost",
+            selector_reason=(
+                "Reconciles WBS elements against commercial opportunities, customer POs, "
+                "YRA revenue, and YCA cost to detect commingling, missing PO coverage, and misallocations."
+            ),
+        )
+        return [item]
 
     def _source_of(self, kri: KRI, entity_code: str) -> str:
         """The assigned data source code that exposes an entity, for mention-scan wording."""
@@ -990,7 +1041,7 @@ class PlanInterpreter:
         lowered = text.lower()
         analyses = bool(_ANALYSIS_VERBS.search(lowered))
         for pattern, operation in _RULES:
-            if operation == "ANALYZE_DEBOOKINGS" and not analyses:
+            if operation in ("ANALYZE_DEBOOKINGS", "ANALYZE_WBS_INTEGRITY") and not analyses:
                 continue
             if re.search(pattern, lowered):
                 return operation

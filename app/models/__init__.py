@@ -10,7 +10,15 @@ from app.models.kri import (
     Reviewer,
     kri_data_sources,
 )
-from app.models.financial import OrderIntake, PurchaseOrder
+from app.models.financial import (
+    OrderIntake,
+    PurchaseOrder,
+    OrderIntakeDebooking,
+    WBSElement,
+    SCRMOpportunity,
+    YRARevenueRecord,
+    YCACostRecord,
+)
 from app.models.audit import (
     AuditRun,
     AuditException,
@@ -32,6 +40,11 @@ __all__ = [
     "kri_data_sources",
     "OrderIntake",
     "PurchaseOrder",
+    "OrderIntakeDebooking",
+    "WBSElement",
+    "SCRMOpportunity",
+    "YRARevenueRecord",
+    "YCACostRecord",
     "AuditRun",
     "AuditException",
     "AuditToolInvocation",

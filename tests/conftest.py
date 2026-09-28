@@ -64,8 +64,19 @@ def db_session():
     pa = kri_repo.get_or_create_process_area("Order to Cash", "O2C", "Order to Cash area")
     ds_sap = kri_repo.get_or_create_data_source("SAP ECC", "SAP_ECC", "ERP", is_queryable=True)
     ds_po = kri_repo.get_or_create_data_source("Red Box / PO", "RED_BOX_PO", "PO_ENGINE", is_queryable=True)
-    kri_repo.set_entity_bindings(ds_sap.id, [("ORDER_INTAKE", True), ("OI_DEBOOKING", False)])
+    ds_scrm = kri_repo.get_or_create_data_source("SCRM / Salesforce", "SCRM", "CRM", is_queryable=True)
+    kri_repo.set_entity_bindings(
+        ds_sap.id,
+        [
+            ("ORDER_INTAKE", True),
+            ("OI_DEBOOKING", False),
+            ("WBS_MASTER", False),
+            ("YRA_REVENUE", False),
+            ("YCA_COST", False),
+        ],
+    )
     kri_repo.set_entity_bindings(ds_po.id, [("PURCHASE_ORDER", True)])
+    kri_repo.set_entity_bindings(ds_scrm.id, [("SCRM_OPPORTUNITY", True)])
     # A catalog source with no queryable data, used to prove R8.
     kri_repo.get_or_create_data_source(
         "Sapiens",

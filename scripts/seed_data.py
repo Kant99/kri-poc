@@ -14,7 +14,15 @@ import random
 from datetime import date, timedelta
 from sqlalchemy.orm import Session
 from app.core.database import SessionLocal, init_db
-from app.models.financial import OrderIntake, OrderIntakeDebooking, PurchaseOrder
+from app.models.financial import (
+    OrderIntake,
+    OrderIntakeDebooking,
+    PurchaseOrder,
+    WBSElement,
+    SCRMOpportunity,
+    YRARevenueRecord,
+    YCACostRecord,
+)
 
 CUSTOMERS = [
     "Acme Global Corp",
@@ -207,7 +215,8 @@ def _generate_dataset_for_year(year: int, record_count: int = 80):
         # have populated populations, while preserving the exact 80 records in Q1 for test assertions.
         base_q2 = date(year, 4, 6)
         base_q3 = date(year, 7, 6)
-        current_week_start = date(year, 9, 21)
+        today = date.today()
+        current_week_start = (today - timedelta(days=today.weekday())) if today.year == year else date(year, 9, 21)
 
         for i in range(81, 141):
             order_id = f"ORD-{year * 1000 + i}"
@@ -364,11 +373,13 @@ def _generate_debookings_for_year(year: int, order_ids_by_customer):
     if year == 2026:
         # Add Q3 debookings including customer cancellations exceeding 10% for specific customers
         q3_cancelled_customers = [CUSTOMERS[6], CUSTOMERS[2]]  # Global Trade Dynamics, Blue Horizon Ltd
+        today = date.today()
+        cw_start = (today - timedelta(days=today.weekday())) if today.year == year else date(year, 9, 21)
         for customer in q3_cancelled_customers:
             cust_orders = orders_for(customer, 4)
             for ord_id in cust_orders:
                 seq += 1
-                booking_date = date(year, 9, 21) + timedelta(days=(seq % 3))
+                booking_date = cw_start + timedelta(days=(seq % 3))
                 debooking_date = booking_date + timedelta(days=2)
                 add(seq, ord_id, customer, booking_date, debooking_date, 35000.0, "CUSTOMER_CANCELLED")
 
@@ -384,6 +395,352 @@ def _generate_debookings_for_year(year: int, order_ids_by_customer):
     return debookings
 
 
+def _apply_wbs_scenarios(orders, pos):
+    """Decorate the existing 2026 Q1 orders and POs with deterministic WBS integrity scenarios.
+    
+    This preserves the exact 80 Q1 orders, 74 POs, and 8 missing PO cases required by existing tests,
+    while attaching rich multi-opportunity and WBS commingling structures.
+    """
+    # 1. Clean WBS: WBS-PRJ-001 (Cyberdyne Systems)
+    orders[0].wbs_element = "WBS-PRJ-001"
+    orders[0].opportunity_id = "OPP-2026-001"
+    pos[0].wbs_element = "WBS-PRJ-001"
+    pos[0].opportunity_id = "OPP-2026-001"
+
+    # 2. Multi-Opportunity Commingled WBS: WBS-PRJ-COMMINGLED-02 (Hyperion Enterprises - 2 opps)
+    orders[1].wbs_element = "WBS-PRJ-COMMINGLED-02"
+    orders[1].opportunity_id = "OPP-2026-002A"
+    pos[1].wbs_element = "WBS-PRJ-COMMINGLED-02"
+    pos[1].opportunity_id = "OPP-2026-002A"
+    orders[5].wbs_element = "WBS-PRJ-COMMINGLED-02"
+    orders[5].opportunity_id = "OPP-2026-002B"
+    pos[5].wbs_element = "WBS-PRJ-COMMINGLED-02"
+    pos[5].opportunity_id = "OPP-2026-002B"
+
+    # 3. Multi-Customer Commingled WBS: WBS-PRJ-MULTICUST-03 (Starlight Media & Global Trade Dynamics)
+    orders[2].wbs_element = "WBS-PRJ-MULTICUST-03"
+    orders[2].opportunity_id = "OPP-2026-003"
+    pos[2].wbs_element = "WBS-PRJ-MULTICUST-03"
+    pos[2].opportunity_id = "OPP-2026-003"
+    orders[3].wbs_element = "WBS-PRJ-MULTICUST-03"
+    orders[3].opportunity_id = "OPP-2026-003"
+    pos[3].wbs_element = "WBS-PRJ-MULTICUST-03"
+    pos[3].opportunity_id = "OPP-2026-003"
+
+    # 4. Uncovered WBS (Missing Customer PO): WBS-PRJ-UNCOVERED-04 (Initech Software - from 71..78 missing PO pool)
+    orders[70].wbs_element = "WBS-PRJ-UNCOVERED-04"
+    orders[70].opportunity_id = "OPP-2026-004"
+
+    # 5. Revenue Over-Recognition Beyond 5% Tolerance: WBS-PRJ-REVEXCEED-05 (Radiant Networks)
+    orders[4].wbs_element = "WBS-PRJ-REVEXCEED-05"
+    orders[4].opportunity_id = "OPP-2026-005"
+    pos[4].wbs_element = "WBS-PRJ-REVEXCEED-05"
+    pos[4].opportunity_id = "OPP-2026-005"
+
+    # 6. Orphan Cost Parking WBS: WBS-PRJ-ORPHAN-06 (No orders or POs assigned)
+
+    # 7. Minor Revenue Within Tolerance: WBS-PRJ-TOLERANCE-07 (Futura Tech)
+    orders[6].wbs_element = "WBS-PRJ-TOLERANCE-07"
+    orders[6].opportunity_id = "OPP-2026-007"
+    pos[6].wbs_element = "WBS-PRJ-TOLERANCE-07"
+    pos[6].opportunity_id = "OPP-2026-007"
+
+
+def _generate_wbs_data():
+    """Generate realistic, deterministic WBS elements, SCRM opportunities, YRA revenue, and YCA costs."""
+    wbs_list = []
+    opp_list = []
+    yra_list = []
+    yca_list = []
+
+    # 1. Clean WBS: WBS-PRJ-001 (Cyberdyne Systems)
+    wbs_list.append(
+        WBSElement(
+            wbs_code="WBS-PRJ-001",
+            project_name="Cloud Modernization Enterprise",
+            responsible_person="Sarah Jenkins",
+            customer_name="Cyberdyne Systems",
+            budget_amount=500000.0,
+            status="ACTIVE",
+            created_date=date(2026, 1, 10),
+            source_system="SAP_ECC",
+        )
+    )
+    opp_list.append(
+        SCRMOpportunity(
+            opportunity_id="OPP-2026-001",
+            contract_id="SCRM-CN-1001",
+            opportunity_name="Cyberdyne Cloud Phase 1",
+            customer_name="Cyberdyne Systems",
+            planned_value=25000.0,
+            status="WON",
+            close_date=date(2026, 1, 5),
+            source_system="SCRM",
+        )
+    )
+    yra_list.append(
+        YRARevenueRecord(
+            revenue_id="YRA-REV-001",
+            wbs_element="WBS-PRJ-001",
+            opportunity_id="OPP-2026-001",
+            billing_doc="INV-9001",
+            customer_name="Cyberdyne Systems",
+            revenue_date=date(2026, 2, 20),
+            revenue_amount=20000.0,
+            currency="USD",
+            fiscal_period="2026-Q1",
+            status="POSTED",
+            source_system="SAP_ECC",
+        )
+    )
+    yca_list.append(
+        YCACostRecord(
+            cost_id="YCA-CST-001",
+            wbs_element="WBS-PRJ-001",
+            cost_element="LABOR",
+            vendor_or_person="Consulting Team Alpha",
+            cost_date=date(2026, 2, 15),
+            cost_amount=15000.0,
+            currency="USD",
+            fiscal_period="2026-Q1",
+            status="POSTED",
+            source_system="SAP_ECC",
+        )
+    )
+
+    # 2. Multi-Opportunity Commingled WBS: WBS-PRJ-COMMINGLED-02 (2 distinct SCRM opportunities on 1 WBS)
+    wbs_list.append(
+        WBSElement(
+            wbs_code="WBS-PRJ-COMMINGLED-02",
+            project_name="Shared Core Infrastructure Rollout",
+            responsible_person="Michael Chang",
+            customer_name="Hyperion Enterprises",
+            budget_amount=800000.0,
+            status="ACTIVE",
+            created_date=date(2026, 1, 10),
+            source_system="SAP_ECC",
+        )
+    )
+    opp_list.extend([
+        SCRMOpportunity(
+            opportunity_id="OPP-2026-002A",
+            contract_id="SCRM-CN-2001",
+            opportunity_name="Hyperion ERP Module Upgrade",
+            customer_name="Hyperion Enterprises",
+            planned_value=50000.0,
+            status="WON",
+            close_date=date(2026, 1, 8),
+            source_system="SCRM",
+        ),
+        SCRMOpportunity(
+            opportunity_id="OPP-2026-002B",
+            contract_id="SCRM-CN-2002",
+            opportunity_name="Hyperion Analytics Platform",
+            customer_name="Hyperion Enterprises",
+            planned_value=120000.0,
+            status="WON",
+            close_date=date(2026, 1, 14),
+            source_system="SCRM",
+        ),
+    ])
+    yra_list.append(
+        YRARevenueRecord(
+            revenue_id="YRA-REV-002",
+            wbs_element="WBS-PRJ-COMMINGLED-02",
+            opportunity_id="OPP-2026-002A",
+            billing_doc="INV-9002",
+            customer_name="Hyperion Enterprises",
+            revenue_date=date(2026, 2, 28),
+            revenue_amount=40000.0,
+            currency="USD",
+            fiscal_period="2026-Q1",
+            status="POSTED",
+            source_system="SAP_ECC",
+        )
+    )
+
+    # 3. Multi-Customer Commingled WBS: WBS-PRJ-MULTICUST-03 (Starlight Media & Global Trade Dynamics)
+    wbs_list.append(
+        WBSElement(
+            wbs_code="WBS-PRJ-MULTICUST-03",
+            project_name="Shared Data Gateway Service",
+            responsible_person="David Miller",
+            customer_name="Starlight Media",
+            budget_amount=600000.0,
+            status="ACTIVE",
+            created_date=date(2026, 1, 10),
+            source_system="SAP_ECC",
+        )
+    )
+    opp_list.append(
+        SCRMOpportunity(
+            opportunity_id="OPP-2026-003",
+            contract_id="SCRM-CN-3001",
+            opportunity_name="Cross-Org Data Gateway",
+            customer_name="Starlight Media",
+            planned_value=114000.0,
+            status="WON",
+            close_date=date(2026, 1, 10),
+            source_system="SCRM",
+        )
+    )
+
+    # 4. Uncovered WBS (Missing Customer PO): WBS-PRJ-UNCOVERED-04
+    wbs_list.append(
+        WBSElement(
+            wbs_code="WBS-PRJ-UNCOVERED-04",
+            project_name="AI Pilot Exploration",
+            responsible_person="Elena Rostova",
+            customer_name="Initech Software",
+            budget_amount=200000.0,
+            status="ACTIVE",
+            created_date=date(2026, 1, 10),
+            source_system="SAP_ECC",
+        )
+    )
+    opp_list.append(
+        SCRMOpportunity(
+            opportunity_id="OPP-2026-004",
+            contract_id="SCRM-CN-4001",
+            opportunity_name="Initech AI Pilot",
+            customer_name="Initech Software",
+            planned_value=40000.0,
+            status="WON",
+            close_date=date(2026, 1, 10),
+            source_system="SCRM",
+        )
+    )
+    yra_list.append(
+        YRARevenueRecord(
+            revenue_id="YRA-REV-004",
+            wbs_element="WBS-PRJ-UNCOVERED-04",
+            opportunity_id="OPP-2026-004",
+            billing_doc="INV-9004",
+            customer_name="Initech Software",
+            revenue_date=date(2026, 2, 25),
+            revenue_amount=30000.0,
+            currency="USD",
+            fiscal_period="2026-Q1",
+            status="POSTED",
+            source_system="SAP_ECC",
+        )
+    )
+
+    # 5. Revenue Over-Recognition Beyond 5% Tolerance: WBS-PRJ-REVEXCEED-05
+    wbs_list.append(
+        WBSElement(
+            wbs_code="WBS-PRJ-REVEXCEED-05",
+            project_name="Network Security Hardening",
+            responsible_person="Alex Turner",
+            customer_name="Radiant Networks",
+            budget_amount=250000.0,
+            status="ACTIVE",
+            created_date=date(2026, 1, 10),
+            source_system="SAP_ECC",
+        )
+    )
+    opp_list.append(
+        SCRMOpportunity(
+            opportunity_id="OPP-2026-005",
+            contract_id="SCRM-CN-5001",
+            opportunity_name="Radiant SecOps Hardening",
+            customer_name="Radiant Networks",
+            planned_value=60000.0,
+            status="WON",
+            close_date=date(2026, 1, 10),
+            source_system="SCRM",
+        )
+    )
+    # Booked OI is $61,726.85. 5% tolerance + $5,000 = $69,813.19 limit. YRA revenue is $95,000.
+    yra_list.append(
+        YRARevenueRecord(
+            revenue_id="YRA-REV-005",
+            wbs_element="WBS-PRJ-REVEXCEED-05",
+            opportunity_id="OPP-2026-005",
+            billing_doc="INV-9005",
+            customer_name="Radiant Networks",
+            revenue_date=date(2026, 3, 1),
+            revenue_amount=95000.0,
+            currency="USD",
+            fiscal_period="2026-Q1",
+            status="POSTED",
+            source_system="SAP_ECC",
+        )
+    )
+
+    # 6. Orphan Cost Parking WBS: WBS-PRJ-ORPHAN-06 (YCA costs incurred, zero OI, zero Opp)
+    wbs_list.append(
+        WBSElement(
+            wbs_code="WBS-PRJ-ORPHAN-06",
+            project_name="Internal Innovation Reserve",
+            responsible_person="Rachel Green",
+            customer_name=None,
+            budget_amount=100000.0,
+            status="ACTIVE",
+            created_date=date(2026, 1, 5),
+            source_system="SAP_ECC",
+        )
+    )
+    yca_list.append(
+        YCACostRecord(
+            cost_id="YCA-CST-006",
+            wbs_element="WBS-PRJ-ORPHAN-06",
+            cost_element="SUBCONTRACT",
+            vendor_or_person="Subcontractor Beta",
+            cost_date=date(2026, 2, 10),
+            cost_amount=85000.0,
+            currency="USD",
+            fiscal_period="2026-Q1",
+            status="POSTED",
+            source_system="SAP_ECC",
+        )
+    )
+
+    # 7. Minor Revenue Within Tolerance: WBS-PRJ-TOLERANCE-07 (YRA exceeds OI within 5% tolerance)
+    wbs_list.append(
+        WBSElement(
+            wbs_code="WBS-PRJ-TOLERANCE-07",
+            project_name="Enterprise CRM Migration",
+            responsible_person="James Wilson",
+            customer_name="Futura Tech",
+            budget_amount=300000.0,
+            status="ACTIVE",
+            created_date=date(2026, 1, 10),
+            source_system="SAP_ECC",
+        )
+    )
+    opp_list.append(
+        SCRMOpportunity(
+            opportunity_id="OPP-2026-007",
+            contract_id="SCRM-CN-7001",
+            opportunity_name="Futura Migration",
+            customer_name="Futura Tech",
+            planned_value=175000.0,
+            status="WON",
+            close_date=date(2026, 1, 10),
+            source_system="SCRM",
+        )
+    )
+    # OI = $179,062.76. Limit = $179,062.76 * 1.05 + $5,000 = $193,015.90. YRA = $182,000.0
+    yra_list.append(
+        YRARevenueRecord(
+            revenue_id="YRA-REV-007",
+            wbs_element="WBS-PRJ-TOLERANCE-07",
+            opportunity_id="OPP-2026-007",
+            billing_doc="INV-9007",
+            customer_name="Futura Tech",
+            revenue_date=date(2026, 2, 28),
+            revenue_amount=182000.0,
+            currency="USD",
+            fiscal_period="2026-Q1",
+            status="POSTED",
+            source_system="SAP_ECC",
+        )
+    )
+
+    return wbs_list, opp_list, yra_list, yca_list
+
+
 def seed_financial_data(db: Session, record_count: int = 80) -> None:
     """Generate deterministic order intake, purchase order and debooking records.
 
@@ -393,6 +750,10 @@ def seed_financial_data(db: Session, record_count: int = 80) -> None:
     random.seed(42)  # Fixed seed for strict determinism
 
     # Clear existing financial records
+    db.query(YCACostRecord).delete()
+    db.query(YRARevenueRecord).delete()
+    db.query(SCRMOpportunity).delete()
+    db.query(WBSElement).delete()
     db.query(OrderIntakeDebooking).delete()
     db.query(OrderIntake).delete()
     db.query(PurchaseOrder).delete()
@@ -404,6 +765,8 @@ def seed_financial_data(db: Session, record_count: int = 80) -> None:
 
     for year in (2026, 2024):
         orders, pos = _generate_dataset_for_year(year, record_count=record_count)
+        if year == 2026:
+            _apply_wbs_scenarios(orders, pos)
         all_orders.extend(orders)
         all_pos.extend(pos)
         by_customer = {}
@@ -411,9 +774,16 @@ def seed_financial_data(db: Session, record_count: int = 80) -> None:
             by_customer.setdefault(order.customer_name, []).append(order.order_id)
         all_debookings.extend(_generate_debookings_for_year(year, by_customer))
 
+    # Add WBS and SCRM Opportunity population
+    wbs_elements, opps, yra_records, yca_records = _generate_wbs_data()
+
+    db.add_all(wbs_elements)
+    db.add_all(opps)
     db.add_all(all_orders)
     db.add_all(all_pos)
     db.add_all(all_debookings)
+    db.add_all(yra_records)
+    db.add_all(yca_records)
     db.commit()
 
     print_summary(db, len(all_orders), len(all_pos), len(all_debookings))
@@ -437,6 +807,18 @@ def print_summary(db: Session, orders: int, pos: int, debookings: int = 0) -> No
             OrderIntakeDebooking.source_system == source
         ).count()
         print(f"  order_intake_debookings.source    = {source:<12} -> {count} records")
+    for source in sorted({w.source_system for w in db.query(WBSElement).all()}):
+        count = db.query(WBSElement).filter(WBSElement.source_system == source).count()
+        print(f"  wbs_elements.source_system        = {source:<12} -> {count} records")
+    for source in sorted({s.source_system for s in db.query(SCRMOpportunity).all()}):
+        count = db.query(SCRMOpportunity).filter(SCRMOpportunity.source_system == source).count()
+        print(f"  scrm_opportunities.source_system  = {source:<12} -> {count} records")
+    for source in sorted({y.source_system for y in db.query(YRARevenueRecord).all()}):
+        count = db.query(YRARevenueRecord).filter(YRARevenueRecord.source_system == source).count()
+        print(f"  yra_revenue_records.source_system = {source:<12} -> {count} records")
+    for source in sorted({c.source_system for c in db.query(YCACostRecord).all()}):
+        count = db.query(YCACostRecord).filter(YCACostRecord.source_system == source).count()
+        print(f"  yca_cost_records.source_system    = {source:<12} -> {count} records")
 
     unmatched = db.query(OrderIntake).filter(OrderIntake.po_reference.is_(None)).count()
     print(f"  orders with no PO reference (expected MISSING_PO population): {unmatched}")
@@ -456,6 +838,10 @@ def verify_seeded_data(db: Session) -> bool:
         (OrderIntake, "SAP_ECC"),
         (PurchaseOrder, "RED_BOX_PO"),
         (OrderIntakeDebooking, "SAP_ECC"),
+        (WBSElement, "SAP_ECC"),
+        (SCRMOpportunity, "SCRM"),
+        (YRARevenueRecord, "SAP_ECC"),
+        (YCACostRecord, "SAP_ECC"),
     ):
         count = db.query(model).filter(model.source_system == source).count()
         if count == 0:

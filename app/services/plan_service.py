@@ -36,6 +36,7 @@ OPERATION_TOOL_MAP: Dict[str, str] = {
     "BUILD_EVIDENCE": "build_evidence",
     "GENERATE_EXPLANATION": "generate_explanation",
     "ANALYZE_DEBOOKINGS": "analyze_oi_debookings",
+    "ANALYZE_WBS_INTEGRITY": "analyze_wbs_integrity",
 }
 
 #: ``PREPARE`` is the single operation the LLM is allowed to reason over at run time.
@@ -52,7 +53,7 @@ MANDATORY_OPERATIONS = ("EXTRACT_POPULATION", "MATCH_RECORDS")
 #: matching and threshold stages: ``analyze_oi_debookings`` reconciles the debookings to their
 #: bookings and applies the recognition rules itself. Demanding MATCH_RECORDS there would force
 #: the plan to invent a match the KRI never asked for.
-SELF_COMPARING_OPERATIONS = ("ANALYZE_DEBOOKINGS",)
+SELF_COMPARING_OPERATIONS = ("ANALYZE_DEBOOKINGS", "ANALYZE_WBS_INTEGRITY")
 
 
 def mandatory_operations_for(plan: "StructuredPlan") -> Tuple[str, ...]:

@@ -157,6 +157,9 @@ class PlanExecutor:
         if tool_name == "analyze_oi_debookings":
             self._promote_debooking_findings(output, context, step)
 
+        if tool_name == "analyze_wbs_integrity":
+            self._promote_wbs_findings(output, context, step)
+
         # Metric step binds the metrics reference for later stages.
         if tool_name == "calculate_kri_metrics":
             context.metric_ref = (step.get("parameters") or {}).get("population_alias")
@@ -373,6 +376,21 @@ class PlanExecutor:
                 "rules": params.get("recognition_rules") or [],
             }
 
+        if tool_name == "analyze_wbs_integrity":
+            return {
+                "audit_run_reference": context.run_reference,
+                "wbs_dataset_reference": context.resolve_dataset(params.get("wbs_alias")),
+                "opportunities_dataset_reference": context.resolve_dataset(params.get("opportunities_alias")),
+                "order_intake_dataset_reference": context.resolve_dataset(params.get("order_intake_alias")),
+                "customer_pos_dataset_reference": context.resolve_dataset(params.get("customer_pos_alias")),
+                "yra_revenue_dataset_reference": context.resolve_dataset(params.get("yra_revenue_alias")),
+                "yca_cost_dataset_reference": context.resolve_dataset(params.get("yca_cost_alias")),
+                "max_opportunities_per_wbs": params.get("max_opportunities_per_wbs", 1),
+                "revenue_tolerance_percentage": params.get("revenue_tolerance_percentage", 0.05),
+                "revenue_tolerance_amount": params.get("revenue_tolerance_amount", 5000.0),
+                "rules": params.get("rules") or [],
+            }
+
         if tool_name == "build_evidence":
             return {"audit_run_reference": context.run_reference}
 
@@ -480,6 +498,39 @@ class PlanExecutor:
                     "ratio_threshold": finding.get("ratio_threshold"),
                     "reason_code": finding.get("reason_code"),
                 },
+            }
+            context.add_candidate_exception(candidate)
+            if context.run_logger:
+                context.run_logger.log_exception_detected(candidate)
+
+    def _promote_wbs_findings(
+        self, output: Dict[str, Any], context: AuditExecutionContext, step: Dict[str, Any]
+    ) -> None:
+        """Convert WBS integrity findings into candidate audit exceptions."""
+        import uuid
+
+        for finding in output.get("findings", []) or []:
+            wbs_element = finding.get("wbs_element") or finding.get("opportunity_id") or "UNKNOWN_WBS"
+            code = finding.get("code", "WBS_INTEGRITY_FINDING")
+            severity = finding.get("severity", "HIGH")
+            exposure = float(finding.get("exposure_amount") or 0.0)
+            explanation_text = finding.get("explanation") or f"WBS integrity exception: {code}"
+            candidate = {
+                "exception_reference": f"exc_{uuid.uuid4().hex[:8]}",
+                "order_id": wbs_element,
+                "order_amount": float(finding.get("order_intake_amount") or exposure or 0.0),
+                "po_amount": float(finding.get("customer_po_amount") or 0.0) if finding.get("customer_po_amount") is not None else None,
+                "exception_type": code,
+                "severity": severity,
+                "reason_code": code,
+                "difference_amount": float(finding.get("excess_amount") or exposure or 0.0),
+                "difference_percentage": finding.get("percentage_difference"),
+                "threshold_value": None,
+                "explanation": explanation_text,
+                "order_record": finding,
+                "po_record": None,
+                "calculation_details": finding,
+                "threshold_details": {"exposure_amount": exposure},
             }
             context.add_candidate_exception(candidate)
             if context.run_logger:
